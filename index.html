@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Task Management</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;700&family=Prompt:wght@400;700&family=Kanit:wght@400;700&family=Mitr:wght@400;700&family=Chakra+Petch:wght@400;700&family=Bai+Jamjuree:wght@400;700&display=swap">
+<link rel="stylesheet" href="css/styles.css?v=2">
+</head>
+<body>
+
+<!-- ============ LOGIN SCREEN (Firebase Auth — see js/auth.js) ============
+     Kept as a UI shell for when real auth is wired in. By default the
+     mock skips this screen and goes straight into the app. -->
+<div id="loginScreen" class="login-screen" style="display:none;">
+  <div class="login-card">
+    <div class="login-logo-wrap">
+      <img class="app-logo-img" data-default="assets/logo.png" src="assets/logo.png" alt="Task Management" onerror="this.style.display='none'">
+    </div>
+    <h2 data-i18n="login.title">เข้าสู่ระบบ</h2>
+    <div class="crumb" style="margin-bottom:18px;">Task Management</div>
+    <form id="loginForm">
+      <div class="field full" style="margin-bottom:12px;">
+        <label>ID (Username)</label>
+        <input type="text" id="loginUsername" autocomplete="username" placeholder="username">
+      </div>
+      <div class="field full" style="margin-bottom:14px;">
+        <label data-i18n="ui.password">Password</label>
+        <input type="password" id="loginPassword" autocomplete="current-password" placeholder="••••••••">
+      </div>
+      <div id="loginError" class="login-error" style="display:none;"></div>
+      <button type="submit" class="btn btn-primary" id="loginSubmitBtn" style="width:100%;" data-i18n="login.submit">เข้าสู่ระบบ</button>
+      <button type="button" class="btn btn-ghost" id="loginDevBtn" style="width:100%; margin-top:10px;">Dev Login</button>
+    </form>
+    <div class="login-hint">ล็อกอินด้วยไอดีพนักงาน · หรือกด Dev Login เพื่อเข้าเป็น Developer (mock)</div>
+  </div>
+</div>
+
+<!-- Global error badge (like the error count in DevTools Console) -->
+<div class="error-badge" id="errorBadge" style="display:none;">
+  <span class="error-badge-icon">⚠</span>
+  <span id="errorBadgeCount">0</span>
+  <div class="error-badge-panel" id="errorBadgePanel" style="display:none;">
+    <div class="error-badge-panel-head">
+      <span data-i18n="error.recent">ข้อผิดพลาดล่าสุด</span>
+      <button type="button" id="errorBadgeClear" data-i18n="error.clearAll">ล้างทั้งหมด</button>
+    </div>
+    <div id="errorBadgeList"></div>
+  </div>
+</div>
+
+<!-- Card modal (shared by the Diary board's Board / List / Calendar views) —
+     lives outside #jigsawRoot so it renders regardless of the active page. -->
+<div class="modal-overlay" id="cardModalOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="cardModalTitle">เพิ่มการ์ด</h3>
+      <button class="close-x" id="cardModalClose">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="cardId">
+      <input type="hidden" id="cardBoard">
+      <div class="field full">
+        <label data-i18n="card.topic">หัวข้อ (Topic) *</label>
+        <input type="text" id="cardTopic" data-i18n-placeholder="card.topicPh" placeholder="เช่น นัดเจอเพื่อน, ไปเที่ยว, งานสำคัญ">
+      </div>
+      <div class="field full">
+        <label data-i18n="card.details">รายละเอียด (Details)</label>
+        <textarea id="cardDetails" rows="3" data-i18n-placeholder="card.detailsPh" placeholder="รายละเอียดเพิ่มเติม..."></textarea>
+      </div>
+      <div class="field full field-boxed" id="cardRoomField" style="display:none;">
+        <label data-i18n="card.room">Room</label>
+        <select id="cardRoom"></select>
+      </div>
+      <div class="field full field-boxed" id="cardCategoryField" style="display:none;">
+        <label data-i18n="ui.category">Category</label>
+        <select id="cardCategory"></select>
+      </div>
+      <div class="field full field-boxed">
+        <label data-i18n="ui.status">Status</label>
+        <select id="cardStatus"></select>
+      </div>
+      <div class="field full field-boxed" id="cardColorField">
+        <label data-i18n="card.color">สีบนปฏิทิน</label>
+        <div class="color-mode-toggle">
+          <button type="button" class="color-mode-btn" data-colormode="category" data-i18n="card.color.category">Category</button>
+          <button type="button" class="color-mode-btn" data-colormode="status" data-i18n="card.color.status">Status</button>
+          <button type="button" class="color-mode-btn" data-colormode="custom" data-i18n="card.color.custom">กำหนดเอง</button>
+        </div>
+        <div id="cardCustomColorWrap" class="card-custom-color" style="display:none;">
+          <input type="color" id="cardCustomColor" class="status-color-input" value="#FB7562">
+          <span class="setting-desc" style="margin:0;" data-i18n="card.color.customHint">เลือกสีที่จะใช้กับ chip ของการ์ดนี้บนปฏิทิน</span>
+        </div>
+      </div>
+      <div class="field full field-boxed" id="cardTextColorField">
+        <label data-i18n="card.textColor">สีตัวอักษรบน chip และ pill</label>
+        <div class="color-mode-toggle">
+          <button type="button" class="color-mode-btn text-mode-btn" data-textmode="default" data-i18n="card.textColor.default">ตามค่าเริ่มต้น</button>
+          <button type="button" class="color-mode-btn text-mode-btn" data-textmode="custom" data-i18n="card.textColor.custom">กำหนดเอง</button>
+        </div>
+        <div id="cardTextColorWrap" class="card-custom-color" style="display:none;">
+          <input type="color" id="cardTextColor" class="status-color-input" value="#FFFFFF">
+          <span class="setting-desc" style="margin:0;" id="cardTextColorHint"></span>
+        </div>
+      </div>
+      <div class="field full">
+        <label data-i18n="card.dueDates">Due Date ของแต่ละ Status</label>
+        <div id="cardDueDatesList" class="card-duedates-list"></div>
+      </div>
+      <div class="field full field-boxed" id="cardNotifyField">
+        <label data-i18n="card.notify">การแจ้งเตือน</label>
+        <div class="notif-settings-row">
+          <button type="button" class="notif-days-btn notify-mode-btn" data-notifymode="default" data-i18n="card.notify.default">ตามค่าเริ่มต้น</button>
+          <button type="button" class="notif-days-btn notify-mode-btn" data-notifymode="custom" data-i18n="card.notify.custom">กำหนดเอง</button>
+        </div>
+        <div id="cardNotifyCustom" style="display:none; margin-top:12px;">
+          <div class="card-notify-line">
+            <span class="card-notify-line-label" data-i18n="notify.unitDays">วัน</span>
+            <div class="notif-settings-row">
+              <button type="button" class="notif-days-btn card-notify-days-btn" data-notifydays="1">1</button>
+              <button type="button" class="notif-days-btn card-notify-days-btn" data-notifydays="3">3</button>
+              <button type="button" class="notif-days-btn card-notify-days-btn" data-notifydays="5">5</button>
+            </div>
+          </div>
+          <div class="card-notify-line">
+            <span class="card-notify-line-label" data-i18n="notify.unitHours">ชั่วโมง</span>
+            <div class="notif-settings-row">
+              <button type="button" class="notif-days-btn card-notify-hours-btn" data-notifyhours="1">1</button>
+              <button type="button" class="notif-days-btn card-notify-hours-btn" data-notifyhours="3">3</button>
+              <button type="button" class="notif-days-btn card-notify-hours-btn" data-notifyhours="5">5</button>
+            </div>
+          </div>
+        </div>
+        <div class="card-notif-hint" id="cardNotifyHint"></div>
+      </div>
+      <div class="field full">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" id="cardBtnCancel" data-i18n="common.cancel">ยกเลิก</button>
+      <button class="btn btn-primary" id="cardBtnSave" data-i18n="common.save">บันทึก</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ BEDROOM (main app) ============ -->
+<div id="toastStack" class="toast-stack"></div>
+
+<div id="jigsawRoot" style="display:none;">
+<div class="app">
+
+  <button id="mobileNavToggle" class="mobile-nav-toggle" type="button" aria-label="เมนู" aria-expanded="false">&#9776;</button>
+  <div id="mobileNavBackdrop" class="mobile-nav-backdrop"></div>
+
+  <div class="sidebar">
+    <div class="logo-wrap"><img class="app-logo-img" data-default="assets/logo.png" src="assets/logo.png" alt="Task Management" onerror="this.style.display='none'"></div>
+    <div id="sidebarNav" class="sidebar-nav"></div>
+    <div class="sidebar-footer">
+      Task Management
+      <div id="jigsawLoggedInAs" style="margin-top:8px; font-size:11px; color:var(--c-nav-link); word-break:break-all;"></div>
+      <button class="btn btn-ghost logout-btn" style="width:100%; margin-top:10px; font-size:12px; padding:6px;" data-i18n="sidebar.logout">ออกจากระบบ</button>
+    </div>
+  </div>
+
+  <div class="main">
+    <div id="page-home" class="page" style="display:none;">
+      <div class="topbar">
+        <h1 data-i18n="nav.home">Home</h1>
+        <div class="crumb" data-i18n="home.crumb">ภาพรวมงานทั้งหมด</div>
+      </div>
+      <div class="content">
+        <div class="home-charts">
+          <div id="homeFeaturedChart" class="home-featured-slot"></div>
+          <div id="homeSmallCharts" class="home-small-slots"></div>
+        </div>
+
+        <div class="home-bottom">
+          <div class="panel home-panel">
+            <div class="home-panel-head">
+              <h3 class="setting-title" data-i18n="home.today">งานที่ต้องทำวันนี้</h3>
+              <p class="setting-desc" data-i18n="home.today.desc">รวมงานที่ยังไม่เสร็จจากทุกห้องที่ถึงกำหนดวันนี้</p>
+            </div>
+            <div id="homeTodayBody"></div>
+          </div>
+
+          <div class="panel home-panel">
+            <div class="home-panel-head">
+              <h3 class="setting-title" data-i18n="home.progress">ความคืบหน้า</h3>
+              <p class="setting-desc" data-i18n="home.progress.desc">สัดส่วนงานที่เสร็จสมบูรณ์เทียบกับงานที่ยังทำอยู่</p>
+            </div>
+            <div id="homeProgressBody"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="page-maincal" class="page" style="display:none;">
+      <div class="topbar">
+        <h1 data-i18n="nav.maincal">Main Calendar</h1>
+        <div class="crumb" data-i18n="maincal.crumb">ปฏิทินรวมกำหนดงานจากทุกห้อง</div>
+      </div>
+      <div class="content">
+        <div class="cal-toolbar">
+          <button class="btn btn-icon cal-nav" data-dir="-1">←</button>
+          <div class="cal-label" id="maincal-cal-label"></div>
+          <button class="btn btn-icon cal-nav" data-dir="1">→</button>
+          <button class="btn btn-ghost cal-today" data-i18n="common.today">วันนี้</button>
+        </div>
+        <div class="calendar-weekdays">
+          <div data-i18n="wd.mon">จ</div><div data-i18n="wd.tue">อ</div><div data-i18n="wd.wed">พ</div><div data-i18n="wd.thu">พฤ</div><div data-i18n="wd.fri">ศ</div><div data-i18n="wd.sat">ส</div><div data-i18n="wd.sun">อา</div>
+        </div>
+        <div class="calendar-grid" id="maincal-calendar"></div>
+      </div>
+    </div>
+
+    <div id="page-globalnote" class="page" style="display:none;">
+      <div class="topbar">
+        <h1 data-i18n="nav.globalnote">Note</h1>
+        <div class="crumb" data-i18n="globalnote.crumb">โน้ตรวม ไม่ผูกกับห้องใด</div>
+      </div>
+      <div class="content">
+        <div class="panel">
+          <div class="toolbar">
+            <div class="spacer"></div>
+            <button class="btn btn-primary" id="btnAddGlobalNote" data-i18n="common.addNote">+ เพิ่มโน้ต</button>
+          </div>
+          <div id="globalNotesListWrap"></div>
+          <div id="globalNotesEmpty" class="empty-state" style="display:none;">
+            <div class="big">📝</div>
+            <span data-i18n="notes.empty">ยังไม่มีโน้ต เริ่มจดอันแรกได้เลย</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="page-notify" class="page" style="display:none;">
+      <div class="topbar">
+        <h1 data-i18n="nav.notify">Notification</h1>
+        <div class="crumb" data-i18n="notify.crumb">งานที่ใกล้ถึงกำหนดจากทุกห้อง</div>
+      </div>
+      <div class="content">
+        <div class="panel">
+          <p class="setting-desc" id="notifyPageHint"></p>
+          <div id="notifyListWrap" class="notify-list"></div>
+          <div id="notifyEmpty" class="empty-state" style="display:none;">
+            <div class="big">🔔</div>
+            <span data-i18n="notify.empty">ยังไม่มีงานที่ใกล้ถึงกำหนด</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="page-jigsawdiary" class="page">
+      <div class="topbar">
+        <h1 data-i18n="nav.task">Task</h1>
+        <div class="crumb" data-i18n="task.crumb">Task Board</div>
+      </div>
+      <div class="content">
+        <div class="tabs">
+          <button class="view-tab-btn active" data-board="jigsaw" data-view="board" data-i18n="ui.board">Board</button>
+          <button class="view-tab-btn" data-board="jigsaw" data-view="list" data-i18n="ui.list">List</button>
+          <button class="view-tab-btn" data-board="jigsaw" data-view="completed" data-i18n="ui.completed">Completed</button>
+        </div>
+
+        <div id="jigsaw-view-board" class="view-pane">
+          <div class="toolbar">
+            <div class="spacer"></div>
+            <button class="btn btn-primary" data-board="jigsaw" data-action="add" data-i18n="common.addCard">+ เพิ่มการ์ด</button>
+          </div>
+          <div class="kanban" id="jigsaw-kanban"></div>
+        </div>
+
+        <div id="jigsaw-view-list" class="view-pane" style="display:none;">
+          <div class="panel">
+            <div class="toolbar">
+              <div class="field">
+                <label data-i18n="ui.status">Status</label>
+                <select id="jigsaw-list-filter-status" class="list-filter-status" data-board="jigsaw">
+                  <option value="all" data-i18n="filter.all">ทั้งหมด</option>
+                </select>
+              </div>
+              <div class="field">
+                <label data-i18n="ui.category">Category</label>
+                <select id="jigsaw-list-filter-category">
+                  <option value="all" data-i18n="filter.all">ทั้งหมด</option>
+                </select>
+              </div>
+              <div class="field">
+                <label data-i18n="filter.from">จากวันที่</label>
+                <input type="date" id="jigsaw-list-filter-from" class="list-filter-from" data-board="jigsaw">
+              </div>
+              <div class="field">
+                <label data-i18n="filter.to">ถึงวันที่</label>
+                <input type="date" id="jigsaw-list-filter-to" class="list-filter-to" data-board="jigsaw">
+              </div>
+              <button class="btn btn-ghost list-filter-clear" data-board="jigsaw" data-i18n="common.clearFilter">ล้างตัวกรอง</button>
+              <div class="field">
+                <label data-i18n="sort.by">เรียงตาม</label>
+                <select id="jigsaw-list-sort"></select>
+              </div>
+              <div class="spacer"></div>
+              <button class="btn btn-primary" data-board="jigsaw" data-action="add" data-i18n="common.addCard">+ เพิ่มการ์ด</button>
+            </div>
+            <div id="jigsaw-list-pagination-top" class="pagination"></div>
+            <div style="overflow-x:auto;">
+            <table>
+              <thead id="jigsaw-list-thead"></thead>
+              <tbody id="jigsaw-list-tbody"></tbody>
+            </table>
+            </div>
+            <div id="jigsaw-list-empty" class="empty-state" style="display:none;">
+              <div class="big">📋</div>
+              <span data-i18n="list.empty">ไม่มีรายการที่ตรงกับตัวกรอง</span>
+            </div>
+            <div id="jigsaw-list-pagination" class="pagination"></div>
+          </div>
+        </div>
+
+        <div id="jigsaw-view-completed" class="view-pane" style="display:none;">
+          <div class="panel">
+            <div class="toolbar">
+              <div class="field">
+                <label data-i18n="filter.searchTopic">ค้นหา Topic</label>
+                <input type="text" id="jigsaw-completed-search" placeholder="พิมพ์เพื่อค้นหา...">
+              </div>
+              <div class="field">
+                <label data-i18n="filter.from">จากวันที่</label>
+                <input type="date" id="jigsaw-completed-from">
+              </div>
+              <div class="field">
+                <label data-i18n="filter.to">ถึงวันที่</label>
+                <input type="date" id="jigsaw-completed-to">
+              </div>
+              <button class="btn btn-ghost" id="jigsaw-completed-clear" data-i18n="common.clearFilter">ล้างตัวกรอง</button>
+            </div>
+            <div id="jigsaw-completed-pagination-top" class="pagination"></div>
+            <table>
+              <thead>
+                <tr><th>Topic</th><th>Current Status</th><th data-i18n="th.completedDate">วันที่เสร็จ</th></tr>
+              </thead>
+              <tbody id="jigsaw-completed-tbody"></tbody>
+            </table>
+            <div id="jigsaw-completed-empty" class="empty-state" style="display:none;">
+              <div class="big">✅</div>
+              <span data-i18n="completed.empty">ยังไม่มีงานที่เสร็จสมบูรณ์</span>
+            </div>
+            <div id="jigsaw-completed-pagination" class="pagination"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="page-calendar" class="page" style="display:none;">
+      <div class="topbar">
+        <h1 data-i18n="nav.calendar">Calendar</h1>
+        <div class="crumb" data-i18n="calendar.crumb">ปฏิทินรวมกำหนดงานทั้งหมด</div>
+      </div>
+      <div class="content">
+        <div class="cal-toolbar">
+          <button class="btn btn-icon cal-nav" data-board="jigsaw" data-dir="-1">←</button>
+          <div class="cal-label" id="jigsaw-cal-label"></div>
+          <button class="btn btn-icon cal-nav" data-board="jigsaw" data-dir="1">→</button>
+          <button class="btn btn-ghost cal-today" data-board="jigsaw" data-i18n="common.today">วันนี้</button>
+        </div>
+        <div class="calendar-weekdays">
+          <div data-i18n="wd.mon">จ</div><div data-i18n="wd.tue">อ</div><div data-i18n="wd.wed">พ</div><div data-i18n="wd.thu">พฤ</div><div data-i18n="wd.fri">ศ</div><div data-i18n="wd.sat">ส</div><div data-i18n="wd.sun">อา</div>
+        </div>
+        <div class="calendar-grid" id="jigsaw-calendar"></div>
+      </div>
+    </div>
+
+    <div id="page-jigsawnotes" class="page" style="display:none;">
+      <div class="topbar">
+        <h1 data-i18n="nav.note">Note</h1>
+        <div class="crumb" data-i18n="note.crumb">โน้ตอิสระ นึกอะไรออกก็จดไว้</div>
+      </div>
+      <div class="content">
+        <div class="panel">
+          <div class="toolbar">
+            <div class="spacer"></div>
+            <button class="btn btn-primary" id="btnAddNote" data-i18n="common.addNote">+ เพิ่มโน้ต</button>
+          </div>
+          <div id="notesListWrap"></div>
+          <div id="notesEmpty" class="empty-state" style="display:none;">
+            <div class="big">📝</div>
+            <span data-i18n="notes.empty">ยังไม่มีโน้ต เริ่มจดอันแรกได้เลย</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="page-interface" class="page" style="display:none;">
+      <div class="topbar">
+        <h1 data-i18n="nav.interface">Interface</h1>
+        <div class="crumb" data-i18n="if.crumb">นำข้อมูลออกเป็น CSV และนำกลับเข้ามาเพื่ออัปเดตหรือลบ</div>
+      </div>
+      <div class="content">
+        <div class="panel settings-panel" id="ifKanbanPanel">
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <h3 class="setting-title" data-i18n="if.export">Export</h3>
+              <p class="setting-desc" data-i18n="if.export.desc">ดาวน์โหลดการ์ดเป็นไฟล์ CSV (เปิดด้วย Excel ได้ ภาษาไทยไม่เพี้ยน) · เลือกได้ว่าทั้งหมดหรือเฉพาะห้องเดียว · ไฟล์นี้พกข้อมูลการ์ดครบทุกช่อง</p>
+            </div>
+            <div class="if-row">
+              <select id="exportRoom"></select>
+              <button class="btn btn-primary" id="exportBtn" data-i18n="if.export.btn">ดาวน์โหลด CSV</button>
+              <button class="btn btn-ghost" id="exportJsonBtn" data-i18n="if.export.json">ดาวน์โหลด JSON (สำรองทั้งหมด)</button>
+              <span class="if-note" id="exportNote"></span>
+            </div>
+            <p class="setting-desc" data-i18n="if.export.jsonDesc">JSON พกทุกอย่าง — ห้อง, การ์ด, โน้ต, Status/Category และสี · เป็นไฟล์เดียวที่กู้แอปกลับมาได้ทั้งหมด · CSV พกเฉพาะการ์ด</p>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <h3 class="setting-title" data-i18n="if.import">Import</h3>
+              <p class="setting-desc" data-i18n="if.import.desc">อัปโหลดไฟล์ CSV ที่แก้แล้ว · แถวที่มี card_id จะถูกอัปเดต · แถวที่ card_id ว่างจะถูกสร้างใหม่ · ใส่ delete ในคอลัมน์ action เพื่อลบแถวนั้น</p>
+            </div>
+            <p class="setting-desc" id="ifColumnHint" style="margin-top:-6px;"></p>
+            <div class="if-row">
+              <label class="file-picker">
+                <input type="file" id="importFile" accept=".csv,.json,text/csv,application/json">
+                <span class="file-picker-btn" data-i18n="if.chooseFile">เลือกไฟล์</span>
+                <span class="file-picker-name" id="importFileName" data-i18n="if.noFile">ยังไม่ได้เลือกไฟล์</span>
+              </label>
+              <button class="btn btn-primary" id="importApply" disabled data-i18n="if.import.apply">ยืนยันนำเข้า</button>
+              <span class="if-note" id="importNote"></span>
+            </div>
+            <label class="if-check" id="importSettingsWrap" style="display:none;">
+              <input type="checkbox" id="importSettings" checked>
+              <span data-i18n="if.import.settings">กู้การตั้งค่าด้วย (ธีม, โหมดสว่าง/มืด, สีตัวอักษร, โลโก้, ภาษา, โซนเวลา)</span>
+            </label>
+            <div id="importReport" class="if-report"></div>
+          </div>
+        </div>
+
+        <!-- Module data boxes (e.g. accounting) are injected here at runtime.
+             Empty when no module is loaded — Base App never references them. -->
+        <div id="moduleDataTools"></div>
+      </div>
+    </div>
+
+    <div id="page-usersetting" class="page" style="display:none;">
+      <div class="topbar">
+        <h1 data-i18n="nav.usersetting">Setting</h1>
+        <div class="crumb">ตั้งค่าส่วนตัว · เฉพาะเครื่องนี้ (ไม่ซิงก์)</div>
+      </div>
+      <div class="content">
+        <div class="panel settings-panel">
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <h3 class="setting-title" data-i18n="setting.language">ภาษา</h3>
+              <p class="setting-desc" data-i18n="setting.language.desc">เลือกภาษาที่ใช้แสดงผลทั้งแอป</p>
+            </div>
+            <div class="lang-toggle">
+              <button class="lang-btn" data-lang="th">TH</button>
+              <button class="lang-btn" data-lang="en">ENG</button>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <h3 class="setting-title" data-i18n="theme.mode">โหมดสว่าง / โหมดมืด</h3>
+              <p class="setting-desc" data-i18n="theme.mode.desc">สลับได้ทุก palette · สีของ Status และ Category ที่ตั้งไว้จะไม่เปลี่ยน แต่ตัวอักษรบนนั้นจะปรับให้อ่านออกเสมอ</p>
+            </div>
+            <div id="themeModeToggle" class="theme-mode-toggle"></div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <h3 class="setting-title" data-i18n="ink.title">สีตัวอักษรบน Status และ Category</h3>
+              <p class="setting-desc" data-i18n="ink.desc">ใช้กับ pill และ chip ทุกที่ที่ตัวอักษรวางบนสีของ Status หรือ Category · แต่ละการ์ดตั้งทับได้เอง</p>
+            </div>
+            <div id="inkModeToggle" class="ink-mode-toggle"></div>
+            <div id="inkCustomWrap" class="card-custom-color" style="display:none; margin-top:12px;">
+              <input type="color" id="inkCustomColor" class="status-color-input" value="#FFFFFF">
+              <span class="setting-desc" style="margin:0;" data-i18n="ink.customHint">สีนี้จะถูกใช้กับทุก pill และ chip ไม่ว่าพื้นหลังจะเป็นสีอะไร</span>
+            </div>
+            <div id="inkPreview" class="ink-preview"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="page-setting" class="page" style="display:none;">
+      <div class="topbar">
+        <h1 data-i18n="nav.setting">Setting</h1>
+        <div class="crumb" data-i18n="setting.crumb">ตั้งค่าแอป</div>
+      </div>
+      <div class="content">
+        <div class="tabs setting-tabs">
+          <button class="setting-tab-btn active" data-settab="app" data-i18n="setting.tab.app">App Setting</button>
+          <button class="setting-tab-btn" data-settab="rooms" data-i18n="setting.tab.rooms">Room Management</button>
+          <button class="setting-tab-btn" data-settab="notify" data-i18n="setting.tab.notify">Notification Setting</button>
+          <button class="setting-tab-btn" data-settab="theme" data-i18n="setting.tab.theme">Theme Setting</button>
+        </div>
+
+        <div id="setting-tab-app" class="panel settings-panel">
+
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <h3 class="setting-title" data-i18n="setting.timezone">โซนเวลา</h3>
+              <p class="setting-desc" data-i18n="setting.timezone.desc">ใช้ตัดสินว่า "วันนี้" คือวันไหน และเวลาครบกำหนดของแต่ละงานตรงกับเวลาจริงเมื่อไหร่ · ค่าเริ่มต้นคือ Asia/Bangkok</p>
+            </div>
+            <div class="setting-timezone-row">
+              <select id="settingTimezone"></select>
+              <span class="setting-timezone-now" id="settingTimezoneNow"></span>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <h3 class="setting-title" data-i18n="setting.logo">โลโก้</h3>
+              <p class="setting-desc" data-i18n="setting.logo.desc">อัปโหลดรูปเพื่อใช้เป็นโลโก้ที่มุมซ้ายบน · SVG ดีที่สุด (เล็กและคมทุกความละเอียด) หรือ PNG พื้นหลังโปร่งใส · ไฟล์ไม่เกิน 256 KB</p>
+            </div>
+            <div class="setting-logo-row">
+              <div class="setting-logo-preview">
+                <img id="settingLogoPreview" alt="" style="display:none;">
+                <div id="settingLogoEmpty" class="setting-logo-empty" data-i18n="setting.logo.empty">ยังไม่มีโลโก้</div>
+              </div>
+              <div class="setting-logo-actions">
+                <label class="btn btn-primary" for="settingLogoInput" data-i18n="setting.logo.choose">เลือกรูป…</label>
+                <input type="file" id="settingLogoInput" accept="image/*" style="display:none;">
+                <button class="btn btn-ghost" id="settingLogoRemove" style="color:var(--c-danger); border-color:var(--c-danger);" data-i18n="setting.logo.remove">ลบโลโก้</button>
+              </div>
+            </div>
+            <div class="setting-logo-style">
+              <p class="setting-desc" style="margin-bottom:8px;" data-i18n="setting.logo.style.desc">การแสดงผลโลโก้บนแถบด้านซ้าย (พื้นสีเข้ม) — “ถมขาว” จะเปลี่ยนโลโก้เป็นเงาสีขาวเพื่อให้เห็นชัดเสมอ ส่วน “สีต้นฉบับ” จะคงสีเดิมของรูปไว้</p>
+              <div class="logo-style-toggle">
+                <button class="logo-style-btn" data-logo-style="white" data-i18n="setting.logo.style.white">ถมขาว</button>
+                <button class="logo-style-btn" data-logo-style="original" data-i18n="setting.logo.style.original">สีต้นฉบับ</button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <div id="setting-tab-rooms" class="panel settings-panel" style="display:none;">
+
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <h3 class="setting-title" data-i18n="setting.rooms">Rooms</h3>
+              <p class="setting-desc" id="settingRoomsDesc"></p>
+            </div>
+            <div id="roomsEditorList" class="rooms-editor-list"></div>
+            <button class="btn btn-primary" id="btnAddRoom" style="margin-top:14px;">+ เพิ่มห้อง</button>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <h3 class="setting-title" data-i18n="setting.statuscat">Status &amp; Category</h3>
+              <p class="setting-desc" data-i18n="setting.statuscat.desc">แต่ละห้องมี Status และ Category ของตัวเอง เลือกห้องที่ต้องการแก้ไขก่อน · ลากไอคอน ⠿ เพื่อจัดลำดับ · Status ที่มี 🔒 คือ "เสร็จสมบูรณ์" ซึ่งซิงค์กับหน้า Completed — แก้ชื่อและสีได้ แต่ลบไม่ได้</p>
+            </div>
+
+            <div class="setting-room-picker">
+              <label for="settingRoomSelect" data-i18n="setting.editRoom">แก้ไขห้อง</label>
+              <select id="settingRoomSelect"></select>
+            </div>
+
+            <div class="setting-subsection">
+              <h4 class="setting-subtitle" data-i18n="setting.status">Status</h4>
+              <div id="statusEditorList" class="status-editor-list"></div>
+              <button class="btn btn-primary" id="btnAddStatus" style="margin-top:12px;" data-i18n="setting.status.add">+ เพิ่ม Status</button>
+            </div>
+
+            <div class="setting-subsection">
+              <h4 class="setting-subtitle" data-i18n="setting.category">Category</h4>
+              <p class="setting-desc" style="margin-top:-4px;" data-i18n="setting.category.desc">สีของ Category จะแสดงบนการ์ดและบนปฏิทิน · ต้องเหลืออย่างน้อย 1 Category เพราะทุกการ์ดต้องมีหมวดหมู่</p>
+              <div id="categoryEditorList" class="status-editor-list"></div>
+              <button class="btn btn-primary" id="btnAddCategory" style="margin-top:12px;" data-i18n="setting.category.add">+ เพิ่ม Category</button>
+            </div>
+          </div>
+
+        </div>
+
+        <div id="setting-tab-notify" class="panel settings-panel" style="display:none;">
+
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <h3 class="setting-title" data-i18n="setting.notify">Notification</h3>
+              <p class="setting-desc" data-i18n="setting.notify.desc">ตั้งค่าว่าจะเริ่มแจ้งเตือนล่วงหน้านานแค่ไหนก่อนถึงกำหนด · งานที่เข้าเงื่อนไขจะไปรวมอยู่ในหน้า Notification · แต่ละการ์ดตั้งค่าแยกของตัวเองได้ในฟอร์มการ์ด</p>
+            </div>
+
+            <div class="setting-subsection">
+              <h4 class="setting-subtitle" data-i18n="notify.daysTitle">ล่วงหน้ากี่วัน</h4>
+              <p class="setting-desc" style="margin-top:-4px;" data-i18n="notify.daysDesc">แจ้งเตือนตอนเปิดแอปเท่านั้น</p>
+              <div class="notif-settings-row">
+                <button type="button" class="notif-days-btn notify-days-btn" data-notifydays="1">1</button>
+                <button type="button" class="notif-days-btn notify-days-btn" data-notifydays="3">3</button>
+                <button type="button" class="notif-days-btn notify-days-btn" data-notifydays="5">5</button>
+              </div>
+            </div>
+
+            <div class="setting-subsection">
+              <h4 class="setting-subtitle" data-i18n="notify.hoursTitle">ล่วงหน้ากี่ชั่วโมง</h4>
+              <p class="setting-desc" style="margin-top:-4px;" data-i18n="notify.hoursDesc">แจ้งเตือนทั้งตอนเปิดแอป และระหว่างใช้งานอยู่</p>
+              <div class="notif-settings-row">
+                <button type="button" class="notif-days-btn notify-hours-btn" data-notifyhours="1">1</button>
+                <button type="button" class="notif-days-btn notify-hours-btn" data-notifyhours="3">3</button>
+                <button type="button" class="notif-days-btn notify-hours-btn" data-notifyhours="5">5</button>
+              </div>
+              <p class="setting-desc" id="notifySettingHint" style="margin-top:12px;"></p>
+            </div>
+          </div>
+
+        </div>
+
+        <div id="setting-tab-theme" class="panel settings-panel" style="display:none;">
+
+          <div class="settings-section">
+            <div class="settings-section-head">
+              <h3 class="setting-title" data-i18n="setting.theme">ธีมสี</h3>
+              <p class="setting-desc" data-i18n="setting.theme.desc">เลือกชุดสีของแอป · มีผลกับแถบข้าง พื้นหลัง ปุ่ม และเส้นขอบ · สีของ Status และ Category ตั้งแยกในแท็บ Room Management</p>
+            </div>
+            <div class="sf-theme-custom-block">
+              <div class="settings-section-head">
+                <h4 class="setting-subtitle" data-i18n="theme.custom.section">Custom</h4>
+                <p class="setting-desc" data-i18n="theme.custom.sectionDesc">Build your own palette — pick four colours and the rest is derived</p>
+              </div>
+              <div id="themeCustomList" class="theme-list"></div>
+              <div id="themeCustomEditor"></div>
+            </div>
+
+            <div class="sf-theme-preset-block">
+              <div class="settings-section-head">
+                <h4 class="setting-subtitle" data-i18n="theme.presets">Palettes</h4>
+                <p class="setting-desc" data-i18n="theme.presets.desc">Ready-made colour schemes</p>
+              </div>
+              <div id="themeList" class="theme-list"></div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- NOTE MODAL (ความคิดสะเปะสะปะ) -->
+<div class="modal-overlay" id="noteModalOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="noteModalTitle">เพิ่มโน้ต</h3>
+      <button class="close-x" id="noteModalClose">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="noteId">
+      <div class="field full">
+        <label data-i18n="note.topic">Topic *</label>
+        <input type="text" id="noteTopic" data-i18n-placeholder="note.topicPh" placeholder="เช่น ไอเดียเรื่อง...">
+      </div>
+      <div class="field full">
+        <label data-i18n="note.content">เนื้อหา</label>
+        <textarea id="noteContent" rows="8" data-i18n-placeholder="note.contentPh" placeholder="เขียนอะไรก็ได้ตรงนี้..."></textarea>
+      </div>
+    </div>
+    <div class="modal-foot" style="justify-content:space-between;">
+      <button class="btn btn-ghost" id="noteBtnDelete" style="color:var(--c-danger); border-color:var(--c-danger); display:none;" data-i18n="note.delete">ลบโน้ตนี้</button>
+      <div style="display:flex; gap:10px;">
+        <button class="btn btn-ghost" id="noteBtnCancel" data-i18n="common.cancel">ยกเลิก</button>
+        <button class="btn btn-primary" id="noteBtnSave" data-i18n="common.save">บันทึก</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Environment switch (local vs firebase) — must load before everything. -->
+<script src="js/env.js"></script>
+<!-- Data layer: initialises Firestore + hydrates the cache; must run before
+     app.js, which awaits window.__storeReady before reading anything. Falls
+     back to localStorage if Firebase is unavailable. -->
+<script type="module" src="js/firebase-config.js"></script>
+<!-- app.js was split into js/app/ (core = shared + store-app essentials,
+     base = dormant Base App features, kept flip-back-able via STORE_ONLY).
+     Loaded as ordered CLASSIC scripts so they share ONE global scope exactly
+     like the old single file — this is why they are not type="module".
+     Order below mirrors the original top-to-bottom order — do NOT reshuffle. -->
+<script defer src="js/app/core/i18n.js"></script>
+<script defer src="js/app/core/store.js"></script>
+<script defer src="js/app/core/timezone.js"></script>
+<script defer src="js/app/core/logo.js"></script>
+<script defer src="js/app/base/rooms.js"></script>
+<script defer src="js/app/core/theme.js"></script>
+<script defer src="js/app/base/csv.js"></script>
+<script defer src="js/app/base/notes.js"></script>
+<script defer src="js/app/base/notifications.js"></script>
+<script defer src="js/app/base/undo.js"></script>
+<script defer src="js/app/base/home.js"></script>
+<script defer src="js/app/base/board-engine.js"></script>
+<script defer src="js/app/base/card-modal.js"></script>
+<script defer src="js/app/core/navigation.js"></script>
+<script defer src="js/app/core/module-registry.js"></script>
+<script defer src="js/app/core/main.js"></script>
+<script defer src="js/app/core/mobile.js"></script>
+<!-- Modules are type="module" too, so they defer and run in order AFTER app.js
+     has finished exposing window.registerModule — a plain <script> would run
+     immediately, before app.js, and registerModule wouldn't exist yet. They use
+     window.registerModule (module scope has no access to app.js's top level).
+     Remove a line to ship without that module; nothing in app.js references it. -->
+<!-- accounting + diary modules disabled (kept dormant) — app is Simple Store + Storefront only.
+     Re-enable by uncommenting:
+<script type="module" src="js/modules/accounting.js"></script>
+<script type="module" src="js/modules/diary.js"></script>
+-->
+<script type="module" src="js/modules/todo.js"></script>
+<script type="module" src="js/modules/store-core.js"></script>
+<script type="module" src="js/modules/storefront.js"></script>
+<script type="module" src="js/modules/employees.js"></script>
+<script type="module" src="js/modules/payroll.js"></script>
+<script type="module" src="js/modules/placeholders.js"></script>
+<script type="module" src="js/auth.js"></script>
+</body>
+</html>
