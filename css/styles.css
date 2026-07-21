@@ -2673,3 +2673,9 @@ tr.ox-editing{ background:rgba(224,161,0,0.07); }
 
 .fb-status.fb-wait{ border-color:#E0A100; }
 .fb-status.fb-wait .fb-dot{ background:#E0A100; }
+
+/* Environment badge (hidden in production) */
+.env-badge{ position:fixed; left:14px; bottom:14px; z-index:9998; padding:5px 12px; border-radius:999px;
+  font-size:11px; font-weight:800; letter-spacing:.6px; cursor:pointer; user-select:none;
+  background:#E0A100; color:#1a1a1a; box-shadow:0 4px 14px rgba(0,0,0,0.3); }
+.env-badge.env-local{ background:#5B8FB0; color:#fff; }
