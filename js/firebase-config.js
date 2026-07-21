@@ -73,7 +73,10 @@ if(window.APP_MODE !== 'firebase' || !window.FIREBASE_CONFIG){
   const pending = new Map();   // key -> latest value waiting for its debounce
   const timers  = new Map();
   const failed  = new Map();   // key -> value that exhausted its retries
+  const queued  = new Map();   // key -> waiting for the server, already safe on disk
   let inFlight = 0;
+  let signedIn = false;        // rules reject every write until someone signs in
+  const SLOW_MS = 8000;        // after this a write is "queued", not "in progress"
 
   const sleep = (ms)=> new Promise(r=> setTimeout(r, ms));
   const joinParts = (data)=>{
@@ -91,6 +94,11 @@ if(window.APP_MODE !== 'firebase' || !window.FIREBASE_CONFIG){
       setStatus('bad', 'ยังบันทึกขึ้น Firebase ไม่สำเร็จ ' + failed.size + ' รายการ', retryFailed);
       return;
     }
+    // Firestore only resolves a write once the SERVER confirms it. Offline or on a
+    // slow link that promise just sits there — the data is already safe in the
+    // on-disk queue, so say "waiting to sync" instead of a spinner that never ends.
+    if(!signedIn && pending.size){ setStatus('wait', 'รอเข้าสู่ระบบก่อนบันทึก ' + pending.size + ' รายการ'); return; }
+    if(queued.size){ setStatus('wait', 'รอซิงก์ ' + queued.size + ' รายการ (ข้อมูลถูกเก็บไว้แล้ว)'); return; }
     if(inFlight || pending.size){ setStatus('busy', 'กำลังบันทึก…'); return; }
     clearStatus();
   }
@@ -116,12 +124,20 @@ if(window.APP_MODE !== 'firebase' || !window.FIREBASE_CONFIG){
     window.__fs = fs;
     window.firebaseAuth = authMod.getAuth(app);
     window.__ssBackend = 'firestore';
+    // Writes made before sign-in would all bounce off the rules, so hold them
+    // in the pending map and release them the moment a session exists.
+    authMod.onAuthStateChanged(window.firebaseAuth, (user)=>{
+      signedIn = !!user;
+      window.__fbSignedIn = signedIn;
+      if(signedIn) releaseHeld();
+    });
   }
 
   window.__hydrateStore = async function(){
     try{
       if(!db) await ready;
       if(!db) return;
+      if(!signedIn){ console.info('[firebase] not signed in yet — skipping hydrate'); return; }
       const snap = await fsMod.getDocs(fsMod.collection(db, 'appdata'));
       const next = {};
       snap.forEach(d=>{
@@ -150,25 +166,46 @@ if(window.APP_MODE !== 'firebase' || !window.FIREBASE_CONFIG){
     await fsMod.setDoc(ref, payload);
   }
 
-  async function push(key, value){
-    inFlight++; paint();
+  async function writeWithRetries(key, value){
     for(let attempt = 1; attempt <= MAX_TRIES; attempt++){
       try{
         if(!db) await ready;
         await writeOnce(key, value);
-        failed.delete(key);
-        inFlight--; paint();
         return true;
       }catch(e){
         if(attempt === MAX_TRIES){
           console.error('[firebase] save failed for ' + key, e);
-          failed.set(key, value);
           if(typeof window.logAppError === 'function') window.logAppError('บันทึกขึ้น Firebase ไม่สำเร็จ: ' + key, e);
-          inFlight--; paint();
-          return false;
+          throw e;
         }
         await sleep(400 * Math.pow(2, attempt));   // 0.8s, 1.6s, 3.2s, 6.4s
       }
+    }
+  }
+
+  async function push(key, value){
+    let settled = false;
+    inFlight++; paint();
+    // Stop calling it "in progress" once it is clearly just waiting for the network.
+    const slow = setTimeout(()=>{
+      if(settled) return;
+      inFlight--;
+      queued.set(key, true);
+      paint();
+    }, SLOW_MS);
+
+    try{
+      await writeWithRetries(key, value);
+      failed.delete(key);
+      return true;
+    }catch(e){
+      failed.set(key, value);
+      return false;
+    }finally{
+      settled = true;
+      clearTimeout(slow);
+      if(queued.has(key)) queued.delete(key); else inFlight--;
+      paint();
     }
   }
 
@@ -181,9 +218,19 @@ if(window.APP_MODE !== 'firebase' || !window.FIREBASE_CONFIG){
   function flush(key){
     timers.delete(key);
     if(!pending.has(key)) return;
+    if(!signedIn){ paint(); return; }        // keep it queued; released after sign-in
     const value = pending.get(key);
     pending.delete(key);
     push(key, value);
+  }
+  function releaseHeld(){
+    [...pending.keys()].forEach(k=>{
+      if(timers.has(k)){ clearTimeout(timers.get(k)); timers.delete(k); }
+      const v = pending.get(k);
+      pending.delete(k);
+      push(k, v);
+    });
+    paint();
   }
 
   window.__ssPersist = function(key, value){
@@ -206,6 +253,14 @@ if(window.APP_MODE !== 'firebase' || !window.FIREBASE_CONFIG){
       e.returnValue = '';
       return '';
     }
+  });
+  // Type __fbStatus() in the console to see exactly what the pill is counting.
+  window.__fbStatus = ()=> ({
+    signedIn,
+    debouncing: [...pending.keys()],
+    inFlight,
+    waitingForServer: [...queued.keys()],
+    failed: [...failed.keys()]
   });
   window.addEventListener('online', ()=>{ if(failed.size) retryFailed(); });
   setInterval(()=>{ if(failed.size) retryFailed(); }, 30000);

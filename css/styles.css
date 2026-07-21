@@ -2670,3 +2670,6 @@ tr.ox-editing{ background:rgba(224,161,0,0.07); }
   background:transparent; color:inherit; font:inherit; cursor:pointer; }
 .fb-status .fb-retry:hover{ background:rgba(255,255,255,0.15); }
 @keyframes fbPulse{ 0%,100%{ opacity:1 } 50%{ opacity:0.35 } }
+
+.fb-status.fb-wait{ border-color:#E0A100; }
+.fb-status.fb-wait .fb-dot{ background:#E0A100; }
