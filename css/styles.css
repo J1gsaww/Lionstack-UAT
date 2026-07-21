@@ -2416,8 +2416,12 @@ select{ appearance:none; -webkit-appearance:none; -moz-appearance:none; }
 .del-restore{ white-space:nowrap; }
 
 /* Ledger: VAT tick + Verified stay pinned to the right while the table scrolls */
-.art-table.led-table th.art-sticky-actions, .art-table.led-table td.art-sticky-actions{ width:56px; min-width:56px; right:0; }
-.art-table.led-table th.led-sticky-ver, .art-table.led-table td.led-sticky-ver{ position:sticky; right:56px; width:150px; min-width:150px; background:var(--c-panel); z-index:2; }
+.art-table.led-table th.art-sticky-actions, .art-table.led-table td.art-sticky-actions{ white-space:nowrap; }
+.art-table.led-table th.led-sticky-ver, .art-table.led-table td.led-sticky-ver{ position:sticky; background:var(--c-panel); z-index:2; white-space:nowrap; }
+.art-table.led-table th.led-sticky-vat, .art-table.led-table td.led-sticky-vat{ position:sticky; background:var(--c-panel); z-index:2; text-align:center; white-space:nowrap; }
+.art-table.led-table th.led-sticky-seller, .art-table.led-table td.led-sticky-seller{ position:sticky; background:var(--c-panel); z-index:2; white-space:nowrap; box-shadow:-9px 0 12px -8px rgba(0,0,0,0.35); }
+.vat-no{ color:var(--c-muted); }
+.acc-icon.inv-proof.is-empty{ opacity:0.45; }
 .art-table.led-table th.led-sticky-vat, .art-table.led-table td.led-sticky-vat{ position:sticky; right:206px; width:62px; min-width:62px; background:var(--c-panel); z-index:2; box-shadow:-9px 0 12px -8px rgba(0,0,0,0.35); text-align:center; }
 .led-vat-chk{ width:16px; height:16px; accent-color:var(--c-accent); cursor:pointer; }
 
@@ -2446,3 +2450,177 @@ select{ appearance:none; -webkit-appearance:none; -moz-appearance:none; }
 .pay-line-code{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--c-muted); min-width:72px; }
 .pay-line-name{ flex:1 1 auto; font-size:13.5px; }
 .pay-line-val{ color:var(--c-muted); font-size:13px; }
+
+/* Restock: show the chosen colour, not just its name */
+.rs-color-row{ display:flex; align-items:center; gap:9px; flex:1 0 100%; }
+.rs-color-row select{ flex:1 1 auto; min-width:0; }
+.rs-swatch{ flex:none; width:30px; height:30px; border-radius:8px; border:1px solid var(--c-border); background:#888; box-shadow:inset 0 0 0 1px rgba(255,255,255,0.08); }
+
+/* Order form: outstanding balance */
+.art-pending-box{ flex:1 0 100%; display:flex; align-items:center; gap:5px; padding:8px 10px; border:1px solid var(--c-border); border-radius:8px; background:var(--c-bg); font-size:14px; font-weight:700; color:#C6432E; }
+.art-pending-box .art-pending-clear{ color:#6B8F71; }
+.art-pending-due{ color:#C6432E; font-weight:700; }
+
+/* Settings: per-item fee (platforms) */
+.art-set-fee{ display:inline-flex; align-items:center; gap:4px; flex:none; font-size:12px; color:var(--c-muted); }
+.art-set-feeinp{ width:64px; padding:6px 8px; border:1px solid var(--c-border); border-radius:7px; background:var(--c-bg); color:var(--c-text); font-family:inherit; font-size:12.5px; text-align:right; }
+
+/* Settings: column header so TH vs EN is unmistakable */
+.art-set-headrow{ display:flex; align-items:center; gap:10px; padding:0 0 2px; }
+.art-set-h{ font-size:10.5px; font-weight:700; letter-spacing:.5px; text-transform:uppercase; color:var(--c-muted); }
+.art-set-h-name{ flex:1 1 130px; min-width:0; padding-left:2px; }
+.art-set-h-fee{ width:88px; flex:none; text-align:right; }
+.art-set-h-color{ width:38px; flex:none; text-align:center; }
+.art-set-h-act{ width:30px; flex:none; }
+
+/* Order form: platform fee as percent and/or a flat amount */
+.art-fee-pair{ flex:1 0 100%; display:flex; gap:8px; }
+.art-fee-inp{ flex:1 1 0; min-width:0; display:flex; align-items:center; gap:6px; padding:0 10px 0 0; border:1px solid var(--c-border); border-radius:8px; background:var(--c-bg); font-size:12px; color:var(--c-muted); }
+.art-fee-inp input{ flex:1 1 auto; min-width:0; border:none !important; background:none !important; padding:8px 10px !important; color:var(--c-text); font-family:inherit; font-size:13px; }
+.art-fee-inp input:focus{ outline:none; }
+
+.inv-summary{ font-size:12.5px; color:var(--c-muted); }
+
+/* Accounting summary block (donut + stat cards) */
+.acct-summary{ display:grid; grid-template-columns:minmax(260px,340px) 1fr; gap:20px; align-items:start; margin:4px 0 18px; padding-bottom:16px; border-bottom:1px solid var(--c-border); }
+.acct-summary-stats{ padding-top:6px; }
+.acct-donut{ display:flex; align-items:center; gap:16px; }
+.acct-donut-svg{ width:150px; height:150px; flex:none; }
+.acct-donut-main{ font-size:30px; font-weight:800; fill:var(--c-text); }
+.acct-donut-sub{ font-size:10px; fill:var(--c-muted); }
+.acct-donut-legend{ display:flex; flex-direction:column; gap:6px; min-width:0; }
+@media (max-width:900px){ .acct-summary{ grid-template-columns:1fr; } }
+
+/* Order form: seller + signature */
+.art-seller{ display:grid; grid-template-columns:minmax(160px,220px) 1fr; gap:18px; align-items:start; }
+.art-seller-label{ font-size:12px; color:var(--c-muted); font-weight:600; margin-bottom:6px; }
+.art-seller-name{ font-size:16px; font-weight:700; padding:9px 12px; border:1px solid var(--c-border); border-radius:8px; background:var(--c-bg); }
+.art-sign-pad{ width:100%; max-width:520px; height:150px; border:1px dashed var(--c-border); border-radius:10px; background:#fff; cursor:crosshair; touch-action:none; display:block; }
+.art-sign-actions{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:8px; }
+@media (max-width:700px){ .art-seller{ grid-template-columns:1fr; } }
+
+
+/* Payment proof viewer */
+.pf-list{ display:flex; flex-direction:column; gap:12px; max-height:60vh; overflow:auto; }
+.pf-item{ border:1px solid var(--c-border); border-radius:10px; overflow:hidden; background:var(--c-bg); }
+.pf-item img{ width:100%; max-height:420px; object-fit:contain; display:block; background:#fff; }
+.pf-meta{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 12px; }
+.pf-name{ font-size:12px; color:var(--c-muted); word-break:break-all; }
+
+.acc-icon.art-ord-proof.has-proof{ color:#6B8F71; }
+.pi-thumb img{ cursor:zoom-in; }
+
+
+/* Sell table: VAT tick pinned next to the frozen actions */
+.art-table.sell-table th.art-sticky-actions, .art-table.sell-table td.art-sticky-actions{ white-space:nowrap; }
+.art-table.sell-table th.sell-sticky-vat, .art-table.sell-table td.sell-sticky-vat{ position:sticky; background:var(--c-panel); z-index:2; text-align:center; white-space:nowrap; box-shadow:-9px 0 12px -8px rgba(0,0,0,0.35); }
+.ord-vat-chk{ width:16px; height:16px; accent-color:var(--c-accent); cursor:pointer; }
+
+/* Sell table: VAT status icon (set from the document popup) */
+.vat-icon{ font-size:15px; font-weight:700; line-height:1; }
+.vat-icon.on{ color:#6B8F71; }
+.vat-icon.off{ color:#C6432E; opacity:0.7; }
+
+.split-tag{ display:inline-block; margin-left:5px; padding:2px 6px; border-radius:6px; background:var(--c-bg); border:1px solid var(--c-border); font-size:9.5px; font-weight:700; color:var(--c-muted); vertical-align:middle; }
+
+
+/* Modals: make every control match the rest of the app */
+.art-modal input[type="text"], .art-modal input[type="number"], .art-modal input[type="date"],
+.art-modal select, .art-modal textarea{
+  font-family:inherit; font-size:13px; padding:8px 10px; color:var(--c-text);
+  background:var(--c-bg); border:1px solid var(--c-border); border-radius:8px;
+}
+.art-modal select{ appearance:none; -webkit-appearance:none; padding-right:30px;
+  background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23999' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 10px center; }
+.art-modal label{ font-size:12px; color:var(--c-muted); font-weight:600; }
+.doc-field{ display:flex; flex-direction:column; gap:6px; margin:12px 0; }
+.doc-field select{ width:100%; }
+.eh-diff-section{ padding:10px 14px 6px; font-size:10.5px; font-weight:700; letter-spacing:.5px;
+  text-transform:uppercase; color:var(--c-muted); border-top:1px solid var(--c-border); background:var(--c-bg); }
+
+/* Order form: VAT management block */
+.art-vat-block{ border:1px solid var(--c-border); border-radius:10px; padding:12px 14px; }
+.art-vat-mode{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-top:10px; }
+.art-vat-mode-label{ font-size:12px; color:var(--c-muted); font-weight:600; }
+
+
+/* Frozen action cell: keep the buttons tight together */
+.art-table .art-sticky-actions{ padding-left:8px !important; padding-right:8px !important; }
+.art-table .art-sticky-actions .art-row-actions{ display:flex; gap:4px; justify-content:flex-end; }
+
+/* Simple horizontal bars for accounting summaries */
+.acct-bars{ display:flex; flex-direction:column; gap:10px; margin-top:8px; }
+.acct-bar-row{ display:grid; grid-template-columns:96px 1fr 92px; align-items:center; gap:10px; }
+.acct-bar-label{ font-size:12.5px; color:var(--c-muted); }
+.acct-bar-track{ height:14px; border-radius:7px; background:var(--c-bg); border:1px solid var(--c-border); overflow:hidden; }
+.acct-bar-fill{ height:100%; border-radius:7px 0 0 7px; }
+.acct-bar-val{ font-size:12.5px; text-align:right; font-weight:700; }
+@media (max-width:1200px){ .acct-summary{ grid-template-columns:1fr !important; } }
+
+/* Commission Setting: rate per category */
+.cm-row{ display:flex; align-items:center; gap:10px; padding:8px 0; border-top:1px solid var(--c-border); }
+.cm-row:first-of-type{ border-top:none; }
+.cm-name{ flex:1 1 auto; font-size:13.5px; }
+
+/* Selling Expenses: inline cost entry */
+.se-inp{ width:96px; padding:6px 8px; border:1px solid var(--c-border); border-radius:7px; background:var(--c-bg); color:var(--c-text); font-family:inherit; font-size:12.5px; text-align:right; }
+.acc-icon.se-note.has-note{ color:#E0A100; }
+
+
+/* Summary cards: 4 per row (the accounting pages carry 5-8 of them now) */
+.art-sum-cards{ grid-template-columns:repeat(4, 1fr) !important; gap:12px; }
+.art-stat-card{ padding:13px 15px; }
+.art-stat-value{ font-size:19px; }
+@media (max-width:1100px){ .art-sum-cards{ grid-template-columns:repeat(2, 1fr) !important; } }
+@media (max-width:640px){ .art-sum-cards{ grid-template-columns:1fr !important; } }
+
+/* Accounts Payable */
+.ap-state{ cursor:pointer; user-select:none; }
+.ap-state:hover{ filter:brightness(1.15); }
+.ap-dirty{ font-size:12px; font-weight:700; color:#E0A100; margin-right:10px; }
+tr.ap-changed{ background:rgba(224,161,0,0.07); }
+.acc-icon.ap-proof.is-empty{ opacity:0.45; }
+.acc-icon.ap-proof.has-proof{ color:#6B8F71; }
+
+.ap-verify.ap-clickable{ cursor:pointer; }
+.ap-verify.ap-clickable:hover{ filter:brightness(1.15); }
+.ap-paid{ width:110px; }
+
+.ap-by{ font-size:10.5px; color:var(--c-muted); margin-top:3px; white-space:nowrap; }
+
+/* Operational Expense: quick-add row + inline editing */
+.ox-add{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.ox-add input[type="date"], .ox-add select, .ox-add input[type="text"], .ox-add input[type="number"]{
+  padding:8px 10px; border:1px solid var(--c-border); border-radius:8px; background:var(--c-bg);
+  color:var(--c-text); font-family:inherit; font-size:13px; }
+.ox-add #oxNewDesc{ flex:1 1 180px; min-width:0; }
+.ox-add #oxNewAmt{ width:110px; text-align:right; }
+.ox-inp{ width:100%; padding:6px 8px; border:1px solid var(--c-border); border-radius:7px;
+  background:var(--c-bg); color:var(--c-text); font-family:inherit; font-size:12.5px; }
+.ox-del:hover{ color:#C6432E; }
+
+/* Operational Expense: row edit mode */
+tr.ox-editing{ background:rgba(224,161,0,0.07); }
+.btn.btn-sm{ padding:5px 12px; font-size:12px; }
+
+/* Profit & Loss statement */
+.pnl-table td{ padding-top:9px; padding-bottom:9px; }
+.pnl-indent{ padding-left:26px !important; color:var(--c-muted); }
+.pnl-head td{ font-weight:700; }
+.pnl-sub td{ font-weight:700; border-top:1px solid var(--c-border); background:var(--c-bg); }
+.pnl-total td{ font-weight:800; font-size:15px; border-top:2px solid var(--c-accent); background:var(--c-bg); }
+.pnl-gap td{ padding-top:14px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--c-muted); }
+
+.cd-preview{ border:1px solid var(--c-border); border-radius:10px; padding:14px 16px; background:var(--c-bg); font-size:13px; line-height:1.7; white-space:normal; }
+
+/* Roles & Access: sections, pages and their subpages */
+.emp-access-sec{ margin-bottom:16px; }
+.emp-access-sec-head{ font-size:10.5px; font-weight:700; letter-spacing:.5px; text-transform:uppercase; color:var(--c-accent); margin:0 0 8px; }
+.emp-access-mod{ padding:8px 0 8px 2px; border-top:1px solid var(--c-border); }
+.emp-access-mod:first-of-type{ border-top:none; }
+.emp-access-main span{ font-weight:700; }
+.emp-access-subs{ display:flex; flex-wrap:wrap; gap:6px 18px; padding:6px 0 0 24px; }
+.emp-access-subs .emp-access-item span{ font-weight:400; color:var(--c-muted); font-size:12.5px; }
+
+.doc-type-btn:disabled{ opacity:0.4; cursor:not-allowed; }

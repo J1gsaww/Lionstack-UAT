@@ -27,20 +27,86 @@
   // Menus that a role can be granted access to. (Kept in sync with the
   // sidebar modules by hand for now; the enforcement lot can derive this
   // from the live module list.)
-  const ACCESS_TARGETS = [
-    { id:'stock',           label:{ th:'จัดการสต๊อก',  en:'Stock Management' } },
-    { id:'sell',            label:{ th:'การขาย',        en:'Sell Management' } },
-    { id:'accounting',      label:{ th:'บัญชี',          en:'Accounting' } },
-    { id:'businessProfile', label:{ th:'ข้อมูลธุรกิจ',   en:'Business Profile' } },
-    { id:'sellStockSetting', label:{ th:'ตั้งค่า Sell/Stock', en:'Sell/Stock Setting' } },
-    { id:'storefront',      label:{ th:'หน้าร้าน',       en:'Storefront' } },
-    { id:'employeeMgmt',    label:{ th:'พนักงาน',        en:'Employees' } },
-    { id:'rolesAccess',     label:{ th:'บทบาท & สิทธิ์',  en:'Roles & Access' } },
-    { id:'delivery',        label:{ th:'การจัดส่ง',       en:'Delivery' } },
-    { id:'deliverySetting', label:{ th:'ตั้งค่าการจัดส่ง',  en:'Delivery Setting' } },
-    { id:'importExport',    label:{ th:'นำเข้า/ส่งออก',  en:'Import / Export' } },
-    { id:'setting',         label:{ th:'ตั้งค่า',         en:'Settings' } },
+  // Menu access, laid out in the same sections as the sidebar. A page that owns
+  // subpages is granted PER SUBPAGE (target id "module:subpage"); the page itself
+  // disappears from the sidebar when none of its subpages are granted.
+  const ACCESS_SECTIONS = [
+    { key:'inventory', label:{ th:'สินค้า & การขาย', en:'Inventory & Sales' }, items:[
+      { id:'stock', label:{ th:'จัดการสต๊อก', en:'Stock Management' }, subs:[
+        { id:'products',       label:{ th:'สินค้า', en:'Products' } },
+        { id:'stockHistory',   label:{ th:'ประวัติสต๊อก', en:'Stock History' } },
+        { id:'productHistory', label:{ th:'ประวัติแก้ไข', en:'Edit History' } }
+      ]},
+      { id:'sell', label:{ th:'การขาย', en:'Sell Management' }, subs:[
+        { id:'revenue',       label:{ th:'รายรับ / ออกบิล', en:'Revenue / Billing' } },
+        { id:'orderStatus',   label:{ th:'สถานะออเดอร์', en:'Order Status' } },
+        { id:'invoiceStatus', label:{ th:'สถานะบิล', en:'Invoice Status' } },
+        { id:'orderHistory',  label:{ th:'ประวัติแก้ไข', en:'Edit History' } }
+      ]},
+      { id:'delivery', label:{ th:'การจัดส่ง', en:'Delivery' }, subs:[
+        { id:'deliveryList',   label:{ th:'รายการจัดส่ง', en:'List' } },
+        { id:'deliveryStatus', label:{ th:'สถานะ', en:'Status' } },
+        { id:'deliveryCal',    label:{ th:'ปฏิทิน', en:'Calendar' } },
+        { id:'deliveryDrivers',label:{ th:'คนขับ', en:'Drivers' } }
+      ]},
+      { id:'storefront', label:{ th:'หน้าร้าน', en:'Storefront' } }
+    ]},
+    { key:'accounting', label:{ th:'บัญชี', en:'Accounting' }, items:[
+      { id:'revenueAcct', label:{ th:'รายได้ & บัญชี', en:'Revenue & Accounting' }, subs:[
+        { id:'invoicing', label:{ th:'ใบแจ้งหนี้', en:'Invoicing' } },
+        { id:'receipts',  label:{ th:'ใบเสร็จ', en:'Receipts' } }
+      ]},
+      { id:'cogsInventory', label:{ th:'ต้นทุนขาย & มูลค่าสต๊อก', en:'COGS & Inventory' }, subs:[
+        { id:'cogsTracking', label:{ th:'ติดตามต้นทุนขาย', en:'COGS Tracking' } },
+        { id:'stockValue',   label:{ th:'มูลค่าสต๊อก', en:'Stock Valuation' } }
+      ]},
+      { id:'expenseAp', label:{ th:'รายจ่าย & เจ้าหนี้', en:'Expense & Payable' }, subs:[
+        { id:'sellingExpenses', label:{ th:'ค่าใช้จ่ายในการขาย', en:'Selling Expenses' } },
+        { id:'apList',          label:{ th:'เจ้าหนี้ (AP)', en:'AP' } },
+        { id:'opExpense',       label:{ th:'ค่าใช้จ่ายดำเนินงาน', en:'Operational Expense' } },
+        { id:'opexHistory',     label:{ th:'ประวัติแก้ไข', en:'Edit History' } }
+      ]},
+      { id:'financialReport', label:{ th:'รายงานการเงิน', en:'Financial Report' }, subs:[
+        { id:'finOverview', label:{ th:'ภาพรวม', en:'Overview' } },
+        { id:'pnl',         label:{ th:'กำไรขาดทุน', en:'Profit & Loss' } },
+        { id:'cashFlow',    label:{ th:'กระแสเงินสด', en:'Cash Flow' } },
+        { id:'taxReport',   label:{ th:'รายงานภาษีขาย', en:'Sales Tax' } }
+      ]}
+    ]},
+    { key:'hr', label:{ th:'จัดการพนักงาน', en:'Employee Management' }, items:[
+      { id:'payroll', label:{ th:'เงินเดือน', en:'Payroll' }, subs:[
+        { id:'empPayroll',     label:{ th:'เงินเดือนพนักงาน', en:'Employee Payroll' } },
+        { id:'compensation',   label:{ th:'ค่าเงิน', en:'Compensation' } },
+        { id:'processPayroll', label:{ th:'ประมวลผลเงินเดือน', en:'Process Payroll' } }
+      ]},
+      { id:'empCalendar', label:{ th:'ปฏิทินพนักงาน', en:'Employee Calendar' } },
+      { id:'timeLeave',   label:{ th:'เวลา & การลา', en:'Time / Leave' } },
+      { id:'benefit',     label:{ th:'สวัสดิการ', en:'Benefit' } }
+    ]},
+    { key:'org', label:{ th:'องค์กร', en:'Organization' }, items:[
+      { id:'businessProfile', label:{ th:'ข้อมูลธุรกิจ', en:'Business Profile' } },
+      { id:'employeeMgmt',    label:{ th:'พนักงาน', en:'Employees' } }
+    ]},
+    { key:'setting', label:{ th:'ตั้งค่า', en:'Setting' }, items:[
+      { id:'importExport',      label:{ th:'นำเข้า/ส่งออก', en:'Import / Export' } },
+      { id:'setting',           label:{ th:'ตั้งค่าระบบ', en:'Admin App Setting' } },
+      { id:'rolesAccess',       label:{ th:'บทบาท & สิทธิ์', en:'Roles & Access' } },
+      { id:'sellStockSetting',  label:{ th:'ตั้งค่า Sell/Stock', en:'Sell/Stock Setting' } },
+      { id:'customerDoc',       label:{ th:'เอกสารลูกค้า', en:'Customer Document' } },
+      { id:'accountingSetting', label:{ th:'ตั้งค่าบัญชี', en:'Accounting Setting' } },
+      { id:'deliverySetting',   label:{ th:'ตั้งค่าการจัดส่ง', en:'Delivery Setting' } },
+      { id:'commissionSetting', label:{ th:'ตั้งค่าคอมมิชชั่น', en:'Commission Setting' } }
+    ]}
   ];
+  // Every grantable menu id, including the "module:subpage" ones.
+  function allAccessIds(){
+    const out = [];
+    ACCESS_SECTIONS.forEach(sec=> sec.items.forEach(it=>{
+      out.push(it.id);
+      (it.subs || []).forEach(sp=> out.push(it.id + ':' + sp.id));
+    }));
+    return out;
+  }
   // Action permissions (not menus) — grantable per role in Roles & Access.
   const ACCESS_PERMISSIONS = [
     { id:'verifyStock',         label:{ th:'ยืนยันประวัติสต๊อก', en:'Verify Stock History' } },
@@ -129,6 +195,12 @@
     Object.assign(emp, patch || {});
     await saveEmployees();
     return true;
+  };
+  // What KIND of role is this (admin / salesperson / driver / ...)? Used by the
+  // store to decide whether to show a person's name or just "Admin".
+  window.roleTypeOf = function(roleKey){
+    const r = (roles || []).find(x=> x.key === roleKey);
+    return r ? (r.roleType || '') : '';
   };
   window.employeesByRoleType = function(rt){
     return (employees || []).filter(e=> e.active !== false)
@@ -304,13 +376,30 @@
   function renderRolesAccess(body){
     const rerender = ()=> renderRolesAccess(body);
     const cards = roles.filter(r=> !r.hidden).map(r=>{
-      const allowed = r.system ? [...ACCESS_TARGETS.map(t=> t.id), ...ACCESS_PERMISSIONS.map(pm=> pm.id)] : (access[r.key] || []);
-      const boxes = ACCESS_TARGETS.map(t=> `
-        <label class="emp-access-item">
-          <input type="checkbox" data-role="${esc(r.key)}" data-target="${esc(t.id)}"
-                 ${allowed.includes(t.id)?'checked':''} ${r.system?'disabled':''}>
-          <span>${esc(targetLabel(t))}</span>
-        </label>`).join('');
+      const allowed = r.system ? [...allAccessIds(), ...ACCESS_PERMISSIONS.map(pm=> pm.id)] : (access[r.key] || []);
+      const boxes = ACCESS_SECTIONS.map(sec=> `
+        <div class="emp-access-sec">
+          <div class="emp-access-sec-head">${esc(targetLabel(sec))}</div>
+          ${sec.items.map(it=>{
+            const subs = it.subs || [];
+            const subIds = subs.map(sp=> it.id + ':' + sp.id);
+            const allOn = subs.length ? subIds.every(id=> allowed.includes(id)) : allowed.includes(it.id);
+            return `
+            <div class="emp-access-mod">
+              <label class="emp-access-item emp-access-main">
+                <input type="checkbox" data-role="${esc(r.key)}" data-target="${esc(it.id)}"
+                       data-kids="${esc(subIds.join(','))}" ${allOn?'checked':''} ${r.system?'disabled':''}>
+                <span>${esc(targetLabel(it))}</span>
+              </label>
+              ${subs.length ? `<div class="emp-access-subs">${subs.map(sp=> `
+                <label class="emp-access-item">
+                  <input type="checkbox" data-role="${esc(r.key)}" data-target="${esc(it.id + ':' + sp.id)}"
+                         ${allowed.includes(it.id + ':' + sp.id)?'checked':''} ${r.system?'disabled':''}>
+                  <span>${esc(targetLabel(sp))}</span>
+                </label>`).join('')}</div>` : ''}
+            </div>`;
+          }).join('')}
+        </div>`).join('');
       const permBoxes = ACCESS_PERMISSIONS.map(pm=> `
         <label class="emp-access-item">
           <input type="checkbox" data-role="${esc(r.key)}" data-target="${esc(pm.id)}"
@@ -359,6 +448,14 @@
       rerender();
     });
 
+    body.querySelectorAll('.emp-access-main input[data-kids]').forEach(master=> master.addEventListener('change', ()=>{
+      const kids = (master.dataset.kids || '').split(',').filter(Boolean);
+      if(!kids.length) return;   // a page with no subpages toggles itself
+      kids.forEach(id=>{
+        const box = body.querySelector(`input[data-role="${master.dataset.role}"][data-target="${id}"]`);
+        if(box && box.checked !== master.checked){ box.checked = master.checked; box.dispatchEvent(new Event('change')); }
+      });
+    }));
     body.querySelectorAll('.emp-access-item input').forEach(cb=> cb.addEventListener('change', async ()=>{
       const rk = cb.dataset.role, tid = cb.dataset.target;
       const set = new Set(access[rk] || []);

@@ -45,7 +45,7 @@ function roomNavKey(view){
 // kept in code but hidden from the sidebar and made unreachable via navigateTo.
 // Flip STORE_ONLY to false to bring the full Base App back. ----
 const STORE_ONLY = true;
-const STORE_HOME_MODULE = 'accounting';
+const STORE_HOME_MODULE = 'stock';   // landing page in store mode (the old 'accounting' page was removed)
 const KANBAN_VIEWS = new Set(['home', 'room', 'maincal', 'globalnote', 'notify']);
 
 let navCollapsed = new Set();
@@ -80,7 +80,14 @@ function renderSidebar(){
   }
   // Categorised nav — store modules + settings grouped under titles, ROLE-GATED.
   // A category's title only renders when >=1 of its items is visible to the role.
-  const canSee = (target)=> !target || typeof window.roleCanAccess !== 'function' || window.roleCanAccess(window.currentRole, target);
+  // A page is visible when the page itself is granted OR any of its subpages is.
+  const canSee = (target)=>{
+    if(!target || typeof window.roleCanAccess !== 'function') return true;
+    if(window.roleCanAccess(window.currentRole, target)) return true;
+    const m = getModule(target);
+    const subs = (m && Array.isArray(m.subpages)) ? m.subpages : [];
+    return subs.some(sp=> window.roleCanAccess(window.currentRole, target + ':' + sp));
+  };
   const modItem = (id)=>{
     const m = getModule(id);
     if(!m || !m.pageId || !canSee(id)) return '';
@@ -90,12 +97,11 @@ function renderSidebar(){
     ? `<div class="nav-item ${activeKey===navKey?'active':''}" data-nav="${navKey}"><span class="dot"></span><span class="label">${t(labelKey)}</span></div>`
     : '';
   const NAV_CATS = [
-    ['nav.cat.personal',  [ modItem('todo') ]],
     ['nav.cat.inventory', [ modItem('stock'), modItem('sell'), modItem('delivery'), modItem('storefront') ]],
-    ['nav.cat.accounting',[ modItem('accounting'), modItem('payroll'), modItem('costCenter'), modItem('generalLedger') ]],
-    ['nav.cat.hr',        [ modItem('empCalendar'), modItem('timeLeave'), modItem('benefit') ]],
+    ['nav.cat.accounting',[ modItem('revenueAcct'), modItem('cogsInventory'), modItem('expenseAp'), modItem('financialReport') ]],
+    ['nav.cat.hr',        [ modItem('payroll'), modItem('empCalendar'), modItem('timeLeave'), modItem('benefit') ]],
     ['nav.cat.org',       [ modItem('businessProfile'), modItem('employeeMgmt') ]],
-    ['nav.cat.setting',   [ pageItem('usersetting','nav.usersetting',null), modItem('sellStockSetting'), modItem('deliverySetting'), modItem('rolesAccess'), pageItem('setting','nav.setting','setting'), pageItem('interface','nav.interface','importExport') ]],
+    ['nav.cat.setting',   [ pageItem('interface','nav.interface','importExport'), pageItem('setting','nav.setting','setting'), pageItem('usersetting','nav.usersetting',null), modItem('rolesAccess'), modItem('sellStockSetting'), modItem('customerDoc'), modItem('accountingSetting'), modItem('deliverySetting'), modItem('commissionSetting') ]],
   ];
   NAV_CATS.forEach(([titleKey, items])=>{
     const shown = items.filter(Boolean);
@@ -130,6 +136,15 @@ function renderSidebar(){
   });
 }
 
+// Sidebar order, used to pick a landing page when the requested one is missing.
+const NAV_MODULE_ORDER = ['stock','sell','delivery','storefront','revenueAcct','cogsInventory','expenseAp','financialReport','payroll','empCalendar','timeLeave','benefit','businessProfile','employeeMgmt','customerDoc','commissionSetting','accountingSetting'];
+function firstAvailableModule(){
+  for(const id of NAV_MODULE_ORDER){
+    const m = getModule(id);
+    if(m && m.pageId) return m;
+  }
+  return null;
+}
 function navigateTo(view){
   // Store-only mode: kanban views are hidden — send any such navigation (boot
   // default, error-path fallbacks) to the Simple Store module instead.
@@ -138,6 +153,7 @@ function navigateTo(view){
   }
   currentView = view;
   if(view.type==='home'){
+    if(STORE_ONLY){ navigateTo({ type:'module', moduleId: STORE_HOME_MODULE }); return; }
     showOnlyPage('page-home');
     renderHomePage();
     renderSidebar();
@@ -177,9 +193,19 @@ function navigateTo(view){
         catch(e){ logAppError('module render ล้มเหลว: ' + m.id, e); }
       }
     }else{
-      // Module unregistered (build without it) — fall back rather than blank.
-      showOnlyPage('page-home');
-      renderHomePage();
+      // Module unregistered (build without it) — land on the first sidebar entry
+      // instead of the dormant Base App home page.
+      const fm = firstAvailableModule();
+      if(fm && fm.pageId){
+        currentView = { type:'module', moduleId: fm.id };
+        showOnlyPage(fm.pageId);
+        if(typeof fm.render === 'function'){
+          try{ fm.render(); }
+          catch(e){ logAppError('module render ล้มเหลว: ' + fm.id, e); }
+        }
+      }else{
+        showOnlyPage('page-setting');
+      }
     }
   }else if(view.type==='setting'){
     showOnlyPage('page-setting');

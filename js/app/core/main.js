@@ -341,3 +341,98 @@ document.addEventListener('DOMContentLoaded', async ()=>{
     btn.addEventListener('click', ()=> applyLanguage(btn.dataset.lang));
   });
 });
+
+/* ============================================================================
+ * Number fields: a lone "0" is a HINT, not content.
+ *
+ * Typing into a field pre-filled with 0 used to produce "0250". Every number
+ * input that arrives holding just "0" is emptied and given "0" as its
+ * placeholder instead, so the grey zero disappears the moment you type and the
+ * save code (parseFloat(...)||0) still reads it as zero when left blank.
+ *
+ * Done globally here rather than in each render function so it covers the whole
+ * app — including markup that is rebuilt on every redraw.
+ * ==========================================================================*/
+(function(){
+  if(typeof document === 'undefined' || !document.addEventListener) return;
+
+  function normalise(el){
+    if(!el || el.tagName !== 'INPUT' || el.type !== 'number') return;
+    if(!el.placeholder) el.placeholder = '0';
+    if(el.value === '0') el.value = '';
+  }
+  function scan(node){
+    if(!node || node.nodeType !== 1) return;
+    try{
+      if(node.matches && node.matches('input[type="number"]')) normalise(node);
+      if(node.querySelectorAll) node.querySelectorAll('input[type="number"]').forEach(normalise);
+    }catch(e){ /* detached or exotic node — ignore */ }
+  }
+
+  // Anything rendered later (modals, tables, forms) gets the same treatment.
+  if(typeof MutationObserver === 'function' && document.documentElement){
+    new MutationObserver(function(muts){
+      muts.forEach(function(m){ (m.addedNodes || []).forEach(scan); });
+    }).observe(document.documentElement, { childList:true, subtree:true });
+  }
+
+  // Catches zeros written programmatically after the element already existed.
+  document.addEventListener('focusin', function(e){
+    var el = e.target;
+    if(el && el.tagName === 'INPUT' && el.type === 'number' && el.value === '0'){
+      if(!el.placeholder) el.placeholder = '0';
+      el.value = '';
+    }
+  });
+
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function(){ scan(document.body); });
+  else scan(document.body);
+})();
+
+/* ============================================================================
+ * Esc closes the top-most popup.
+ *
+ * Every modal in the app is an .art-modal-overlay appended to <body>, and each
+ * one's own close() just removes that element — so dismissing the last one here
+ * behaves exactly like clicking Cancel, without every modal wiring its own key
+ * handler.
+ * ==========================================================================*/
+(function(){
+  if(typeof window === 'undefined' || !window.addEventListener) return;
+
+  // Known in-page "back" buttons (order form, product form, edit history,
+  // payroll detail) plus a generic [data-back] hook for anything added later.
+  const BACK_SELECTOR = '#oBack, #pBack, #ehBack, #ehBack2, #payBack, [data-back]';
+  const isVisible = (el)=> !!(el && (el.offsetParent !== null || el.getClientRects().length));
+
+  function onEsc(e){
+    // Some browsers still report the legacy names, so check all of them.
+    const isEsc = e.key === 'Escape' || e.key === 'Esc' || e.keyCode === 27 || e.which === 27;
+    if(!isEsc) return;
+
+    // A popup always wins — close the top-most one first.
+    const all = document.querySelectorAll('.art-modal-overlay');
+    if(all.length){
+      const top = all[all.length - 1];
+      if(top && top.parentNode){
+        e.preventDefault();
+        top.remove();
+      }
+      return;
+    }
+
+    // Otherwise leave the current in-page form exactly as its Back button would.
+    let back = null;
+    const list = document.querySelectorAll(BACK_SELECTOR);
+    for(let i = 0; i < list.length; i++){ if(isVisible(list[i])){ back = list[i]; break; } }
+    if(back){
+      e.preventDefault();
+      back.click();
+    }
+  }
+
+  // CAPTURE phase on window: this runs before any handler further down the tree,
+  // so nothing can swallow the key first (native pickers aside).
+  window.addEventListener('keydown', onEsc, true);
+  window.__escHandlerReady = true;   // type __escHandlerReady in the console to confirm it loaded
+})();

@@ -32,11 +32,13 @@
   // A blank page with a short "not built yet" note.
   function makeStubModule(cfg){
     const ID = cfg.id;
+    const subs = cfg.subpages || [];          // [{ id, th, en }]
+    let sub = subs.length ? subs[0].id : null;
     const T = (k)=> window.moduleI18n(ID)(k);
-    window.registerModuleI18n(ID, {
-      th: { 'title': cfg.title.th, 'crumb': cfg.crumb.th, 'soon': 'ยังไม่เริ่มทำ — สร้างหน้าไว้ก่อนเพื่อให้เห็นภาพรวม' },
-      en: { 'title': cfg.title.en, 'crumb': cfg.crumb.en, 'soon': 'Not built yet — the page exists so the structure is visible' }
-    });
+    const th = { 'title': cfg.title.th, 'crumb': cfg.crumb.th, 'soon': 'ยังไม่เริ่มทำ — สร้างหน้าไว้ก่อนเพื่อให้เห็นภาพรวม' };
+    const en = { 'title': cfg.title.en, 'crumb': cfg.crumb.en, 'soon': 'Not built yet — the page exists so the structure is visible' };
+    subs.forEach(sp=>{ th['sub.'+sp.id] = sp.th; en['sub.'+sp.id] = sp.en; });
+    window.registerModuleI18n(ID, { th, en });
     window.registerModule({
       id: ID,
       navLabel: cfg.title,
@@ -46,33 +48,38 @@
       render(){
         const container = document.getElementById('page-' + ID);
         if(!container) return;
+        const self = this;
+        const subnav = subs.length
+          ? `<div class="acc-subnav store-subnav" id="${ID}Subnav">${subs.map(sp=>
+              `<button type="button" class="acc-subnav-btn ${sp.id===sub?'active':''}" data-subpage="${sp.id}">${esc(T('sub.'+sp.id))}</button>`).join('')}</div>`
+          : '';
+        const heading = subs.length ? esc(T('sub.' + sub)) : '';
         container.innerHTML = `
           <div class="topbar">
             <h1>${esc(T('title'))}</h1>
             <div class="crumb">${esc(T('crumb'))}</div>
           </div>
           <div class="content">
+            ${subnav}
             <div class="panel">
               <div class="art-empty" style="padding:52px 20px;">
                 <div class="art-empty-ico">\u{1F6A7}</div>
+                ${heading ? `<div style="font-weight:700; margin-bottom:4px;">${heading}</div>` : ''}
                 <div>${esc(T('soon'))}</div>
               </div>
             </div>
           </div>`;
+        const nav = container.querySelector('#' + ID + 'Subnav');
+        if(nav) nav.addEventListener('click', function(e){
+          const btn = e.target.closest('[data-subpage]');
+          if(!btn) return;
+          sub = btn.dataset.subpage;
+          self.render();
+        });
       }
     });
   }
 
-  makeStubModule({
-    id: 'costCenter',
-    title: { th:'ศูนย์ต้นทุน', en:'Cost Center' },
-    crumb: { th:'แยกต้นทุนตามหน่วยงาน/กิจกรรม', en:'Cost grouped by unit or activity' }
-  });
-  makeStubModule({
-    id: 'generalLedger',
-    title: { th:'บัญชีแยกประเภท', en:'General Ledger' },
-    crumb: { th:'สมุดบัญชีแยกประเภททั่วไป', en:'The general ledger' }
-  });
   makeStubModule({
     id: 'timeLeave',
     title: { th:'เวลา & การลา', en:'Time / Leave' },

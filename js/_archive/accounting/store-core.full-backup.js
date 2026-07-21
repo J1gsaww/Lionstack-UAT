@@ -29,9 +29,6 @@
     const c = (p && Array.isArray(p.colors)) ? p.colors.find(x=> x.id === it.colorId) : null;
     return c ? (c.name || '') : '';
   }
-  async function saveOpex(){ await window.Store.set(K_OPEX, opex); }
-  async function saveOpexLog(){ await window.Store.set(K_OPEXLOG, opexLog); }
-  const opexLabel = (e)=> (e.details || dispName('expenseCategories', e.category) || '-') + ' \u00B7 ' + fmt(e.amount||0);
   async function saveDeletedOrders(){ await window.Store.set(K_DELORDERS, deletedOrders); }
   async function saveDeletedProducts(){ await window.Store.set(K_DELPRODUCTS, deletedProducts); }
   // Deleting never destroys a record: it moves to the Deleted List, out of every
@@ -65,8 +62,6 @@
   const K_LOTS     = 'mod_store_lots';
   const K_DELORDERS   = 'mod_store_deleted_orders';
   const K_DELPRODUCTS = 'mod_store_deleted_products';
-  const K_OPEX     = 'mod_store_opex';   // day-to-day running costs (rent, ads, fees...)
-  const K_OPEXLOG  = 'mod_store_opexlog';
   const K_STOCKPUB = 'mod_store_stockpublic'; // quantities only — safe for the public shop (no costs, no orders)
   const K_CONFIG   = 'mod_store_config';   // { expenseTags, revenueTags, orderStatuses, invoiceStatuses }
   const K_PROMOS   = 'mod_store_promotions'; // [{ id, name, effectiveDate, endDate, items:[{productId,percent}], closed, endedAck }]
@@ -84,31 +79,9 @@
     { name:'Future usage',    color:'#9B8B78' },
     { name:'Waste',           color:'#C6432E' }
   ];
-  // Sales channels. `fee` = the platform's commission in % — stored now, used by
-  // the profit maths later.
-  // Expense categories for the accounting side. Payroll is locked: other parts of
-  // the app expect it to exist.
-  const DEFAULT_EXPENSE_CATEGORIES = [
-    { name:'Office & Administrative', color:'#5B8FB0' },
-    { name:'Payroll',                 color:'#9B7BB5', role:'payroll', locked:true },
-    { name:'Selling & Marketing',     color:'#C99A4E' },
-    { name:'Professional Fee',        color:'#4FA5A0' },
-    { name:'General Operations',      color:'#6B8F71' }
-  ];
-  const DEFAULT_PLATFORMS = [
-    { name:'Storefront',   color:'#6B8F71', fee:0 },
-    { name:'Line',         color:'#4FA5A0', fee:0 },
-    { name:'Shopee',       color:'#FB7562', fee:12 },
-    { name:'Lazada',       color:'#5B8FB0', fee:10 },
-    { name:'TikTok Shop',  color:'#9B7BB5', fee:12 }
-  ];
-  const DEFAULT_PAYMENT_MODES = [
-    { name:'Cash',           color:'#6B8F71', locked:true },
-    { name:'Online Banking', color:'#5B8FB0', locked:true }
-  ];
   const DEFAULT_REVENUE_TAGS = [
-    { name:'From Stock', color:'#6B8F71', locked:true },
-    { name:'Pre-Order',  color:'#FDBD31', locked:true }
+    { name:'From Stock', color:'#6B8F71' },
+    { name:'Pre-Order',  color:'#FDBD31' }
   ];
   const DEFAULT_ORDER_STATUSES = [
     { name:'Quotation',        color:'#9B8B78' },
@@ -128,9 +101,9 @@
   const DEFAULT_DELIVERY_STATUSES = [
     { name:'Wait for Delivery',  color:'#9B8B78', role:'waiting',    locked:true },
     { name:'Delivering',         color:'#FDBD31', role:'delivering', locked:true },
-    { name:'Success',            color:'#6B8F71', role:'success',    locked:true },
-    { name:'A Problem Occurred', color:'#C6432E', role:'problem',    locked:true },
-    { name:'Returned',           color:'#7C6A55', role:'returned',   locked:true }
+    { name:'Success',            color:'#6B8F71', role:'success' },
+    { name:'A Problem Occurred', color:'#C6432E', role:'problem' },
+    { name:'Returned',           color:'#7C6A55', role:'returned' }
   ];
   // Shipping types: 'Our Driver' + 'Outsource Driver' are locked (rename-only, can't delete); more can be added.
   const DEFAULT_SHIPPING_TYPES = [
@@ -172,24 +145,23 @@
   let lots = [];
   let promotions = [];
   let orderLog = [];
-  let opex = [];
-  let opexLog = [];
   let deletedOrders = [];
   let deletedProducts = [];
   let productLog = [];
   let _ehDetail = null;
+  let _ledgerMode = false;
   let prodEditingId = null;
   let prodImageData = null;
   let prodBillData = null;
-  // Product status is DERIVED from stock, never chosen by hand.
   const PRODUCT_TAGS = [
     { name:'In Stock',     color:'#6B8F71' },
+    { name:'Pre-Order',    color:'#FDBD31' },
     { name:'Out of Stock', color:'#C6432E' }
   ];
   // Thai display names for the built-in defaults (canonical English `name` stays the stored/matched key).
   const _NAME_TH = {
     'Instrument':'เครื่องมือ/อุปกรณ์','Fix Cost':'ต้นทุนคงที่','Production Cost':'ต้นทุนการผลิต','Convenience':'ค่าอำนวยความสะดวก','Future usage':'สำรองไว้ใช้อนาคต','Waste':'ของเสีย',
-    'From Stock':'จากสต็อก','Pre-Order':'พรีออเดอร์','Cash':'เงินสด','Online Banking':'โอนผ่านธนาคาร','Storefront':'หน้าร้าน',
+    'From Stock':'จากสต็อก','Pre-Order':'พรีออเดอร์',
     'Quotation':'ใบเสนอราคา','Confirmed':'ยืนยันแล้ว','Deposit Received':'รับมัดจำแล้ว','In Production':'กำลังผลิต','Ready to Ship':'พร้อมส่ง','Shipped':'จัดส่งแล้ว','Completed':'เสร็จสมบูรณ์',
     'Draft':'ฉบับร่าง','Sent':'ส่งแล้ว','Partially paid':'ชำระบางส่วน','Paid':'ชำระแล้ว',
     'Wait for Delivery':'รอจัดส่ง','Delivering':'กำลังจัดส่ง','Success':'สำเร็จ','A Problem Occurred':'เกิดปัญหา','Returned':'ตีกลับ',
@@ -200,7 +172,7 @@
     'Shop A':'ร้าน A','Shop B':'ร้าน B','Shop C':'ร้าน C',
     'In Stock':'มีสินค้า','Out of Stock':'สินค้าหมด'
   };
-  [DEFAULT_EXPENSE_TAGS, DEFAULT_REVENUE_TAGS, DEFAULT_ORDER_STATUSES, DEFAULT_INVOICE_STATUSES, DEFAULT_DELIVERY_STATUSES, DEFAULT_SHIPPING_TYPES, DEFAULT_OUTSOURCES, DEFAULT_BROUGHT_FROM, DEFAULT_PRODUCT_TYPES, DEFAULT_COST_ORIGINS, DEFAULT_PAYMENT_MODES, DEFAULT_PLATFORMS, DEFAULT_EXPENSE_CATEGORIES, PRODUCT_TAGS].forEach(list=> list.forEach(it=>{ if(_NAME_TH[it.name] && !it.nameTh) it.nameTh = _NAME_TH[it.name]; }));
+  [DEFAULT_EXPENSE_TAGS, DEFAULT_REVENUE_TAGS, DEFAULT_ORDER_STATUSES, DEFAULT_INVOICE_STATUSES, DEFAULT_DELIVERY_STATUSES, DEFAULT_SHIPPING_TYPES, DEFAULT_OUTSOURCES, DEFAULT_BROUGHT_FROM, DEFAULT_PRODUCT_TYPES, DEFAULT_COST_ORIGINS, PRODUCT_TAGS].forEach(list=> list.forEach(it=>{ if(_NAME_TH[it.name] && !it.nameTh) it.nameTh = _NAME_TH[it.name]; }));
 
   const SUBPAGES = ['expense','summary','account','revenue','orderStatus','invoiceStatus','products','stockHistory','setting'];
 
@@ -221,7 +193,7 @@
       productTypes: DEFAULT_PRODUCT_TYPES.map(x=> ({ id: rid(), ...x })),
       costOrigins: DEFAULT_COST_ORIGINS.map(x=> ({ id: rid(), ...x })),
       prefixes: { expense: 'CSA', order: 'ATSC' },
-      business: { name:'', nameEn:'', address:'', addressEn:'', phone:'', taxId:'', branch:'\u0E2A\u0E33\u0E19\u0E31\u0E01\u0E07\u0E32\u0E19\u0E43\u0E2B\u0E0D\u0E48', logo:'', signature:'', stamp:'', vatDefault:false }
+      business: { name:'', nameEn:'', address:'', addressEn:'', phone:'', taxId:'', logo:'', signature:'', stamp:'', vatDefault:false }
     };
     await saveConfig();
   }
@@ -241,26 +213,6 @@
       else et.unshift({ id: rid(), name:'Product', nameTh:'\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32', color:'#5B8FB0', role:'product', locked:true });
       changed = true;
     }
-    if(!config.paymentModes){ config.paymentModes = DEFAULT_PAYMENT_MODES.map(x=> ({ id: rid(), ...x })); changed = true; }
-    if(!config.platforms){ config.platforms = DEFAULT_PLATFORMS.map(x=> ({ id: rid(), ...x })); changed = true; }
-    if(!config.expenseCategories){ config.expenseCategories = DEFAULT_EXPENSE_CATEGORIES.map(x=> ({ id: rid(), ...x })); changed = true; }
-    // Retro-lock the defaults that must never be deleted (existing installs).
-    const LOCK_BY_NAME = {
-      revenueTags:      ['From Stock', 'Pre-Order'],
-      paymentModes:     ['Cash', 'Online Banking'],
-      expenseCategories:['Payroll']
-    };
-    Object.keys(LOCK_BY_NAME).forEach(grp=>{
-      (config[grp] || []).forEach(it=>{
-        if(LOCK_BY_NAME[grp].indexOf(it.name) >= 0 && !it.locked){ it.locked = true; changed = true; }
-      });
-    });
-    (config.deliveryStatuses || []).forEach(it=>{ if(!it.locked){ it.locked = true; changed = true; } });   // every delivery status is locked
-    if(!config.commission){ config.commission = { mode:'pool', base:'goods', rates:{} }; changed = true; }
-    // Every product category gets a rate; 5% unless the user changes it.
-    (config.productTypes || []).forEach(t=>{
-      if(config.commission.rates[t.name] == null){ config.commission.rates[t.name] = 5; changed = true; }
-    });
     if(!config.deliveryStatuses){ config.deliveryStatuses = DEFAULT_DELIVERY_STATUSES.map(x=> ({ id: rid(), ...x })); changed = true; }
     if(!config.shippingTypes){ config.shippingTypes = DEFAULT_SHIPPING_TYPES.map(x=> ({ id: rid(), ...x })); changed = true; }
     if(!config.outsources){ config.outsources = DEFAULT_OUTSOURCES.map(o=> ({ id: rid(), color: '#8A8F80', ...o })); changed = true; }
@@ -269,8 +221,7 @@
     if(!config.productTypes){ config.productTypes = DEFAULT_PRODUCT_TYPES.map(x=> ({ id: rid(), ...x })); changed = true; }
     if(!config.costOrigins){ config.costOrigins = DEFAULT_COST_ORIGINS.map(x=> ({ id: rid(), ...x })); changed = true; }
     if(!config.prefixes){ config.prefixes = { expense: 'CSA', order: 'ATSC' }; changed = true; }
-    if(!config.business){ config.business = { name:'', nameEn:'', address:'', addressEn:'', phone:'', taxId:'', branch:'\u0E2A\u0E33\u0E19\u0E31\u0E01\u0E07\u0E32\u0E19\u0E43\u0E2B\u0E0D\u0E48', logo:'', signature:'', stamp:'', vatDefault:false }; changed = true; }
-    if(config.business && config.business.branch == null){ config.business.branch = '\u0E2A\u0E33\u0E19\u0E31\u0E01\u0E07\u0E32\u0E19\u0E43\u0E2B\u0E0D\u0E48'; changed = true; }
+    if(!config.business){ config.business = { name:'', nameEn:'', address:'', addressEn:'', phone:'', taxId:'', logo:'', signature:'', stamp:'', vatDefault:false }; changed = true; }
     ['expenseTags','revenueTags','orderStatuses','invoiceStatuses','deliveryStatuses','shippingTypes','outsources','broughtFrom','productTypes','costOrigins'].forEach(gk=>{ (config[gk]||[]).forEach(it=>{ if(!it.nameTh && _NAME_TH[it.name]){ it.nameTh = _NAME_TH[it.name]; changed = true; } }); });
     if(changed) saveConfig();
   }
@@ -279,14 +230,6 @@
   // status is the LOCKED "paid" one — nothing enters the books before payment.
   function paidStatusName(){ const st = statusByRole('invoiceStatuses','paid'); return st ? st.name : null; }
   function isPaidOrder(o){ const pn = paidStatusName(); return !!pn && o.invoiceStatus === pn; }
-  // Outstanding balance. A bill whose invoice status is the locked "paid" one is
-  // settled by definition — whatever was typed in Partially Paid, nothing is due.
-  // Ledger style: nothing there is a dash, not a zero.
-  const fmtD = (n)=> (Number(n) || 0) === 0 ? '-' : fmt(n);
-  function pendingOf(co){
-    if(isPaidOrder(co)) return 0;
-    return Math.max(0, (co.net || 0) - (co.paidAmount || 0));
-  }
   async function saveConfig(){ await window.Store.set(K_CONFIG, config); }
   function rid(){ return 'a' + Math.random().toString(36).slice(2,10); }
 
@@ -349,8 +292,6 @@
     deliveries = await window.Store.list(K_DELIVERIES);
     promotions = await window.Store.list(K_PROMOS);
     orderLog   = await window.Store.list(K_ORDERLOG);
-    opex            = await window.Store.list(K_OPEX);
-    opexLog         = await window.Store.list(K_OPEXLOG);
     deletedOrders   = await window.Store.list(K_DELORDERS);
     deletedProducts = await window.Store.list(K_DELPRODUCTS);
     productLog = await window.Store.list(K_PRODUCTLOG);
@@ -376,9 +317,17 @@
   }
 
   function renderSubpage(id, body){
+    _ledgerMode = (id === 'ledger');   // Accounting's read-only copy of the billing table
     if(id === 'profile') renderBusinessProfilePage(body);
     else if(id === 'stockConfig') renderStockConfig(body);
     else if(id === 'sellConfig') renderSellConfig(body);
+    else if(id === 'acctConfig') renderAcctConfig(body);
+    else if(id === 'expense') renderExpensePage(body);
+    else if(id === 'summary') renderSummaryPage(body);
+    else if(id === 'account') renderAccountPage(body);
+    else if(id === 'ledger') renderRevenuePage(body);
+    else if(id === 'vat') renderVatPage(body);
+    else if(id === 'deleted') renderDeletedPage(body);
     else if(id === 'revenue') renderRevenuePage(body);
     else if(id === 'products') renderProductsPage(body);
     else if(id === 'orderStatus') renderOrderKanban(body);
@@ -392,34 +341,8 @@
     else if(id === 'shippingCost') renderShippingCost(body);
     else if(id === 'productHistory') renderEditHistory('product', body);
     else if(id === 'orderHistory') renderEditHistory('order', body);
-    else if(id === 'invoicing') renderBillsPage(body, 'invoicing');
-    else if(id === 'receipts') renderBillsPage(body, 'receipts');
-    else if(id === 'cogsTracking') renderCogsPage(body);
-    else if(id === 'stockValue') renderStockValuation(body);
-    else if(id === 'sellingExpenses') renderSellingExpenses(body);
-    else if(id === 'apList') renderApPage(body);
-    else if(id === 'opExpense') renderOpExpense(body);
-    else if(id === 'finOverview') renderFinPage(body, 'overview');
-    else if(id === 'pnl') renderFinPage(body, 'pnl');
-    else if(id === 'cashFlow') renderFinPage(body, 'cash');
-    else if(id === 'taxReport') renderFinPage(body, 'tax');
-    else if(id === 'customerDoc') renderCustomerDoc(body);
-    else if(id === 'opexHistory') renderEditHistory('opex', body);
-    else if(id === 'commissionSetting') renderCommissionSetting(body);
-    else if(id === 'accountingSetting') renderAccountingSetting(body);
     else body.innerHTML = `<div class="panel"><p class="setting-desc">${esc(T('soon'))}</p></div>`;
   }
-  // One place that knows which log + which field list belongs to a record kind.
-  function ehLogOf(kind){ return kind === 'order' ? orderLog : (kind === 'opex' ? opexLog : productLog); }
-  function ehSaveOf(kind){ return kind === 'order' ? saveOrderLog : (kind === 'opex' ? saveOpexLog : saveProductLog); }
-  function ehFieldsOf(kind){ return kind === 'order' ? orderDiffFields() : (kind === 'opex' ? opexDiffFields() : productDiffFields()); }
-  function opexDiffFields(){ return [
-    {key:'date', label:T('exp.date')},
-    {key:'category', label:T('ox.category'), fmt:(v)=> dispName('expenseCategories', v)},
-    {key:'details', label:T('ox.details')},
-    {key:'method', label:T('pay.mode'), fmt:(v)=> dispName('paymentModes', v)},
-    {key:'amount', label:T('ox.amount'), fmt:(v)=> fmt(v||0)}
-  ]; }
   function ehActionText(a){ return T('eh.'+a); }
   function ehActionBadge(a){ const c = a==='create'?'#6B8F71':(a==='delete'?'#C6432E':'#E0A100'); return `<span class="art-pill" style="background:${c}">${esc(ehActionText(a))}</span>`; }
   function showRawSnapshot(ev){
@@ -432,7 +355,7 @@
   }
   function renderEditHistory(kind, body){
     if(_ehDetail && _ehDetail.kind===kind){ renderEditHistoryDetail(kind, body); return; }
-    const log = ehLogOf(kind);
+    const log = kind==='order' ? orderLog : productLog;
     const byId = {};
     log.forEach(e=>{ (byId[e.entityId] = byId[e.entityId] || []).push(e); });
     const records = Object.keys(byId).map(eid=>{
@@ -440,10 +363,10 @@
       return { eid, label: evs[0].label, events: evs, last: evs[0] };
     }).sort((a,b)=> String(b.last.at||'').localeCompare(String(a.last.at||'')));
     body.innerHTML = `<div class="art-table-wrap"><table class="art-table"><thead><tr><th>${esc(T('eh.record'))}</th><th class="num">${esc(T('eh.changes'))}</th><th>${esc(T('eh.lastAction'))}</th><th>${esc(T('eh.lastEdited'))}</th></tr></thead><tbody>${records.length ? records.map(r=> `<tr class="eh-rec" data-eid="${esc(r.eid)}"><td>${esc(r.label||r.eid)}</td><td class="num">${r.events.length}</td><td>${ehActionBadge(r.last.action)}</td><td class="art-edited">${esc((r.last.by||'-')+' \u00B7 '+_fmtEditedAt(r.last.at))}</td></tr>`).join('') : `<tr><td colspan="4" class="art-empty">${esc(T('eh.empty'))}</td></tr>`}</tbody></table></div>`;
-    body.querySelectorAll('.eh-rec').forEach(tr=> tr.addEventListener('click', ()=>{ const lg = ehLogOf(kind); const es = lg.filter(e=> e.entityId === tr.dataset.eid).slice().sort((a,b)=> String(b.at||'').localeCompare(String(a.at||''))); _ehDetail = { kind, eid: tr.dataset.eid, evId: es.length ? es[0].id : null }; renderEditHistory(kind, body); }));
+    body.querySelectorAll('.eh-rec').forEach(tr=> tr.addEventListener('click', ()=>{ const lg = kind==='order' ? orderLog : productLog; const es = lg.filter(e=> e.entityId === tr.dataset.eid).slice().sort((a,b)=> String(b.at||'').localeCompare(String(a.at||''))); _ehDetail = { kind, eid: tr.dataset.eid, evId: es.length ? es[0].id : null }; renderEditHistory(kind, body); }));
   }
   function renderEditHistoryDetail(kind, body){
-    const log = ehLogOf(kind);
+    const log = kind==='order' ? orderLog : productLog;
     const evsDesc = log.filter(e=> e.entityId === _ehDetail.eid).slice().sort((a,b)=> String(b.at||'').localeCompare(String(a.at||'')));
     if(!evsDesc.length){ _ehDetail = null; renderEditHistory(kind, body); return; }
     if(!_ehDetail.evId || !evsDesc.some(e=> e.id===_ehDetail.evId)) _ehDetail.evId = evsDesc[0].id;
@@ -490,13 +413,6 @@
     const n = (nv==null||nv==='') ? '\u2014' : esc(String(nv));
     return `<div class="eh-diff-row ${changed?'eh-changed':''}"><div class="eh-diff-label">${esc(label)}</div><div class="eh-diff-old">${o}</div><div class="eh-diff-arrow">\u2192</div><div class="eh-diff-new">${n}</div></div>`;
   }
-  // Document/VAT settings shown as their own block at the foot of the diff.
-  function billDocFields(){ return [
-    {key:'vatable', label:T('pay.vat'), fmt:(v)=> v ? T('pay.vatYes') : T('pay.vatNo')},
-    {key:'docSplit', label:T('doc.splitMode'), fmt:(v)=> (v === 'split') ? T('doc.splitApart') : T('doc.splitTogether')},
-    {key:'paymentMode', label:T('pay.mode'), fmt:(v)=> dispName('paymentModes', v)},
-    {key:'platformFee', label:T('rev.platformFee'), fmt:(v)=> (v ? v + '%' : '-')}
-  ]; }
   function _itemsDiff(oldObj, newObj){
     const f = (obj)=> (obj && obj.items ? obj.items : []).map(it=>{ const c = itemColorLabel(it); return esc((it.productName||'-')+(c?' ('+c+')':'')+' \u00B7 '+(it.qty||0)+'\u00D7'+fmt(it.price||0)+(it.discount?' -'+fmt(it.discount)+(it.discountType==='percent'?'%':''):'')); }).join('<br>') || '\u2014';
     const ov = oldObj ? f(oldObj) : null, nv = newObj ? f(newObj) : null;
@@ -511,7 +427,7 @@
     ).join('') + `</div>`;
   }
   function renderDiffView(kind, oldObj, newObj){
-    const fields = ehFieldsOf(kind);
+    const fields = kind==='order' ? orderDiffFields() : productDiffFields();
     const rows = fields.map(f=>{
       const ov = oldObj ? (f.fmt ? f.fmt(oldObj[f.key], oldObj) : (oldObj[f.key]==null?'':oldObj[f.key])) : null;
       const nv = newObj ? (f.fmt ? f.fmt(newObj[f.key], newObj) : (newObj[f.key]==null?'':newObj[f.key])) : null;
@@ -520,17 +436,7 @@
     }).join('');
     const items = kind==='order' ? _itemsDiff(oldObj, newObj) : '';
     const head = `<div class="eh-diff-row eh-diff-head"><div class="eh-diff-label"></div><div class="eh-diff-old">${esc(T('eh.old'))}</div><div class="eh-diff-arrow"></div><div class="eh-diff-new">${esc(T('eh.new'))}</div></div>`;
-    let billBlock = '';
-    if(kind === 'order'){
-      const bRows = billDocFields().map(f=>{
-        const ov2 = oldObj ? (f.fmt ? f.fmt(oldObj[f.key], oldObj) : (oldObj[f.key]==null?'':oldObj[f.key])) : null;
-        const nv2 = newObj ? (f.fmt ? f.fmt(newObj[f.key], newObj) : (newObj[f.key]==null?'':newObj[f.key])) : null;
-        const changed = String(ov2==null?'\u0000':ov2) !== String(nv2==null?'\u0000':nv2);
-        return _diffRow(f.label, ov2, nv2, changed);
-      }).join('');
-      billBlock = `<div class="eh-diff-section">${esc(T('eh.billDetails'))}</div>${bRows}`;
-    }
-    return `<div class="eh-diff">${head}${rows}${items}${billBlock}</div>`;
+    return `<div class="eh-diff">${head}${rows}${items}</div>`;
   }
 
     const _dataTools = {
@@ -990,19 +896,11 @@
     box.querySelectorAll('.sc-base-inp').forEach(inp=> inp.addEventListener('change', async ()=>{ const st=regionMode()==='4'?cs.r4:cs.r6; const v=parseFloat(inp.value); if(v>0) st[inp.dataset.region]=v; else delete st[inp.dataset.region]; await saveConfig(); fillScProv(body); }));
     box.querySelectorAll('.sc-prov-inp').forEach(inp=> inp.addEventListener('change', async ()=>{ const v=parseFloat(inp.value); if(v>0) cs.prov[inp.dataset.code]=v; else delete cs.prov[inp.dataset.code]; await saveConfig(); }));
   }
-  // Which subpages this role may open. Granting the whole module (the old,
-  // pre-subpage way) still means "all of them".
-  function allowedSubs(cfg){
-    if(typeof window.roleCanAccess !== 'function') return cfg.subpages;
-    if(window.roleCanAccess(window.currentRole, cfg.id)) return cfg.subpages;
-    return cfg.subpages.filter(sp=> window.roleCanAccess(window.currentRole, cfg.id + ':' + sp));
-  }
   function makeStoreModule(cfg){
     let sub = cfg.subpages[0];
     const mod = {
       id: cfg.id,
       navLabel: cfg.navLabel,
-      subpages: cfg.subpages,      // read by the sidebar to decide visibility
       pageId: 'page-' + cfg.id,
       async onInit(){ await ensureLoaded(); },
       mount(container){
@@ -1028,15 +926,8 @@
         const nav = document.querySelector('#' + cfg.id + 'Subnav');
         const body = document.querySelector('#' + cfg.id + 'Body');
         if(!nav || !body) return;
-        const visible = allowedSubs(cfg);
-        if(!visible.length){                      // role has no tab here at all
-          nav.innerHTML = '';
-          body.innerHTML = `<div class="panel"><p class="setting-desc">${esc(T('noAccess'))}</p></div>`;
-          return;
-        }
-        if(visible.indexOf(sub) < 0) sub = visible[0];   // landed on a hidden tab
-        nav.innerHTML = visible.length > 1
-          ? visible.map(id=> `<button type="button" class="acc-subnav-btn ${id===sub?'active':''}" data-subpage="${id}">${esc(T('nav.'+id))}</button>`).join('')
+        nav.innerHTML = cfg.subpages.length > 1
+          ? cfg.subpages.map(id=> `<button type="button" class="acc-subnav-btn ${id===sub?'active':''}" data-subpage="${id}">${esc(T('nav.'+id))}</button>`).join('')
           : '';
         renderSubpage(sub, body);
       }
@@ -1045,15 +936,9 @@
     return mod;
   }
 
-  window.registerModule(makeStoreModule({ id:'stock',           navLabel:{ th:'จัดการสต๊อก', en:'Stock Management' },  subpages:['products','stockHistory','productHistory'], dataTools:_dataTools }));
-  window.registerModule(makeStoreModule({ id:'accountingSetting', navLabel:{ th:'\u0E15\u0E31\u0E49\u0E07\u0E04\u0E48\u0E32\u0E1A\u0E31\u0E0D\u0E0A\u0E35', en:'Accounting Setting' }, subpages:['accountingSetting'] }));
-  window.registerModule(makeStoreModule({ id:'commissionSetting', navLabel:{ th:'\u0E15\u0E31\u0E49\u0E07\u0E04\u0E48\u0E32\u0E04\u0E2D\u0E21\u0E21\u0E34\u0E0A\u0E0A\u0E31\u0E48\u0E19', en:'Commission Setting' }, subpages:['commissionSetting'] }));
-  window.registerModule(makeStoreModule({ id:'customerDoc',      navLabel:{ th:'\u0E40\u0E2D\u0E01\u0E2A\u0E32\u0E23\u0E25\u0E39\u0E01\u0E04\u0E49\u0E32', en:'Customer Document' }, subpages:['customerDoc'] }));
-  window.registerModule(makeStoreModule({ id:'financialReport', navLabel:{ th:'\u0E23\u0E32\u0E22\u0E07\u0E32\u0E19\u0E01\u0E32\u0E23\u0E40\u0E07\u0E34\u0E19', en:'Financial Report' }, subpages:['finOverview','pnl','cashFlow','taxReport'] }));
-  window.registerModule(makeStoreModule({ id:'expenseAp',       navLabel:{ th:'\u0E23\u0E32\u0E22\u0E08\u0E48\u0E32\u0E22 & \u0E40\u0E08\u0E49\u0E32\u0E2B\u0E19\u0E35\u0E49', en:'Expense & Account Payable' }, subpages:['sellingExpenses','apList','opExpense','opexHistory'] }));
-  window.registerModule(makeStoreModule({ id:'cogsInventory',   navLabel:{ th:'\u0E15\u0E49\u0E19\u0E17\u0E38\u0E19\u0E02\u0E32\u0E22 & \u0E21\u0E39\u0E25\u0E04\u0E48\u0E32\u0E2A\u0E15\u0E4A\u0E2D\u0E01', en:'COGS & Inventory Valuation' }, subpages:['cogsTracking','stockValue'] }));
-  window.registerModule(makeStoreModule({ id:'revenueAcct',     navLabel:{ th:'\u0E23\u0E32\u0E22\u0E44\u0E14\u0E49 & \u0E1A\u0E31\u0E0D\u0E0A\u0E35', en:'Revenue & Accounting' }, subpages:['invoicing','receipts'] }));
+  window.registerModule(makeStoreModule({ id:'stock',           navLabel:{ th:'จัดการสต๊อก', en:'Stock Management' },  subpages:['products','stockHistory','productHistory'] }));
   window.registerModule(makeStoreModule({ id:'sell',            navLabel:{ th:'การขาย',       en:'Sell Management' },   subpages:['revenue','orderStatus','invoiceStatus','orderHistory'] }));
+  window.registerModule(makeStoreModule({ id:'accounting',      navLabel:{ th:'บัญชี',         en:'Accounting' },        subpages:['expense','summary','ledger','account','vat','deleted','acctConfig'], dataTools:_dataTools }));
   window.registerModule(makeStoreModule({ id:'businessProfile', navLabel:{ th:'ข้อมูลธุรกิจ',   en:'Business Profile' },  subpages:['profile'] }));
   window.registerModule(makeStoreModule({ id:'sellStockSetting', navLabel:{ th:'ตั้งค่า Sell/Stock', en:'Sell/Stock Setting' }, subpages:['sellConfig','stockConfig'] }));
   window.registerModule(makeStoreModule({ id:'delivery',        navLabel:{ th:'การจัดส่ง',      en:'Delivery' },         subpages:['deliveryList','deliveryBoard','deliveryCalendar','deliveryDrivers'] }));
@@ -1217,23 +1102,614 @@
     }).sort((a,b)=> b.date.localeCompare(a.date));
   }
 
+  function renderExpensePage(body){
+    const tags = config.expenseTags || [];
+    body.innerHTML = `
+      <div class="panel">
+        <div class="art-toolbar">
+          <div class="art-field"><label>${esc(T('exp.from'))}</label><input type="date" id="expFrom" value="${esc(expFilter.from)}"></div>
+          <div class="art-field"><label>${esc(T('exp.to'))}</label><input type="date" id="expTo" value="${esc(expFilter.to)}"></div>
+          <div class="art-field"><label>${esc(T('exp.tag'))}</label>
+            <select id="expTagFilter">
+              <option value="all">${esc(T('exp.all'))}</option>
+              ${tags.map(t=> `<option value="${esc(t.name)}" ${expFilter.tag===t.name?'selected':''}>${esc(itemLabel(t))}</option>`).join('')}
+            </select>
+          </div>
+          <button class="btn btn-ghost" id="expClearFilter">${esc(T('exp.clearFilter'))}</button>
+          <div class="art-spacer"></div>
+          <button class="btn btn-primary" id="expAdd">${esc(T('exp.add'))}</button>
+        </div>
+        <div class="art-table-wrap">
+          <table class="art-table" id="expTable">
+            <thead><tr>
+              <th>${esc(T('exp.id'))}</th><th>${esc(T('exp.date'))}</th><th>${esc(T('exp.details'))}</th>
+              <th>${esc(T('exp.tag'))}</th><th class="num">${esc(T('exp.costPerPiece'))}</th>
+              <th class="num">${esc(T('exp.amount'))}</th><th class="num">${esc(T('exp.sumItems'))}</th>
+              <th class="num">${esc(T('exp.shipping'))}</th><th class="num">${esc(T('exp.discount'))}</th>
+              <th class="num">${esc(T('exp.net'))}</th><th>${esc(T('exp.purchaseFrom'))}</th>
+              <th>${esc(T('exp.note'))}</th><th></th>
+            </tr></thead>
+            <tbody id="expTbody"></tbody>
+            <tfoot><tr>
+              <td colspan="9">${esc(T('exp.totalRows'))} (<span id="expRowCount">0</span>)</td>
+              <td class="num" id="expFootTotal">0</td><td colspan="3"></td>
+            </tr></tfoot>
+          </table>
+        </div>
+        <div id="expEmpty" class="art-empty" style="display:none;"><div class="art-empty-ico">🦀</div>${esc(T('exp.empty'))}</div>
+      </div>`;
+
+    const rerender = ()=> renderExpenseTable(body);
+    body.querySelector('#expFrom').addEventListener('change', e=>{ expFilter.from = e.target.value; rerender(); });
+    body.querySelector('#expTo').addEventListener('change', e=>{ expFilter.to = e.target.value; rerender(); });
+    body.querySelector('#expTagFilter').addEventListener('change', e=>{ expFilter.tag = e.target.value; rerender(); });
+    body.querySelector('#expClearFilter').addEventListener('click', ()=>{ expFilter = { from:'', to:'', tag:'all' }; renderExpensePage(body); });
+    body.querySelector('#expAdd').addEventListener('click', ()=> openExpenseModal(null, body));
+    renderExpenseTable(body);
+  }
+
+  function renderExpenseTable(body){
+    const list = expenseFiltered();
+    const tbody = body.querySelector('#expTbody');
+    const empty = body.querySelector('#expEmpty');
+    const table = body.querySelector('#expTable');
+    if(!tbody) return;
+    if(list.length === 0){
+      tbody.innerHTML = ''; table.style.display = 'none'; empty.style.display = 'block';
+    }else{
+      table.style.display = ''; empty.style.display = 'none';
+      tbody.innerHTML = list.map(r=>{
+        const d = new Date(r.date+'T00:00:00');
+        const dateLabel = isNaN(d) ? r.date : (String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear());
+        return `<tr data-id="${r.id}">
+          <td class="art-id">${esc(r.expenseId||'-')}</td>
+          <td>${dateLabel}</td>
+          <td>${esc(r.details)}</td>
+          <td><span class="art-pill" style="background:${esc(expTagColor(r.tag))}">${esc(r.tag)}</span></td>
+          <td class="num">${fmt(r.costPerPiece)}</td>
+          <td class="num">${fmt(r.amount)}</td>
+          <td class="num">${fmt(r.sumItemsCost)}</td>
+          <td class="num">${fmt(r.shippingFee)}</td>
+          <td class="num ${r.discount<0?'art-neg':''}">${fmt(r.discount)}</td>
+          <td class="num" style="font-weight:700;">${fmt(r.net)}</td>
+          <td>${esc(r.purchaseFrom||'-')}</td>
+          <td>${esc(r.note||'-')}</td>
+          <td><div class="art-row-actions">
+            <button class="acc-icon art-exp-edit" title="${esc(T('edit'))}">✎</button>
+            <button class="acc-icon art-exp-del" title="${esc(T('delete'))}">✕</button>
+          </div></td>
+        </tr>`;
+      }).join('');
+      tbody.querySelectorAll('tr').forEach(tr=>{
+        const id = tr.dataset.id;
+        tr.querySelector('.art-exp-edit').addEventListener('click', ()=> openExpenseModal(expenses.find(e=>e.id===id), body));
+        tr.querySelector('.art-exp-del').addEventListener('click', async ()=>{
+          if(!window.confirm(T('exp.delConfirm'))) return;
+          expenses = expenses.filter(e=> e.id !== id);
+          await saveExpenses();
+          renderExpenseTable(body);
+        });
+      });
+    }
+    body.querySelector('#expRowCount').textContent = list.length;
+    body.querySelector('#expFootTotal').textContent = fmt(list.reduce((s,r)=> s+r.net, 0));
+  }
+
+  function openExpenseModal(row, body){
+    expEditingId = row ? row.id : null;
+    expEditingOrigDate = row ? row.date : null;
+    const tags = config.expenseTags || [];
+    const today = new Date().toISOString().slice(0,10);
+    const ov = document.createElement('div');
+    ov.className = 'art-modal-overlay show';
+    ov.innerHTML = `
+      <div class="art-modal">
+        <h3 class="art-modal-title">${esc(row ? T('exp.editTitle') : T('exp.addTitle'))}</h3>
+        <div class="art-modal-id">${esc(T('exp.id'))}: <span id="expIdPreview">-</span></div>
+        <div class="art-form-grid">
+          <label class="art-form-full">${esc(T('exp.details'))}<input type="text" id="mDetails" value="${row?esc(row.details):''}"></label>
+          <label>${esc(T('exp.date'))}<input type="date" id="mDate" value="${row?esc(row.date):today}"></label>
+          <label>${esc(T('exp.tag'))}<select id="mTag" ${canChange('changeExpenseTag')?'':'disabled'}>${tags.map(t=> `<option value="${esc(t.name)}" ${row&&row.tag===t.name?'selected':''}>${esc(itemLabel(t))}</option>`).join('')}</select></label>
+          <label>${esc(T('exp.costPerPiece'))}<input type="number" id="mCost" value="${row?row.costPerPiece:0}" step="0.01"></label>
+          <label>${esc(T('exp.amount'))}<input type="number" id="mAmount" value="${row?row.amount:1}" step="1"></label>
+          <label>${esc(T('exp.shipping'))}<input type="number" id="mShip" value="${row?row.shippingFee:0}" step="0.01"></label>
+          <label>${esc(T('exp.discount'))}<input type="number" id="mDisc" value="${row?Math.abs(row.discount):0}" step="0.01"></label>
+          <label>${esc(T('exp.purchaseFrom'))}<select id="mFrom"><option value="">${esc(T('exp.pickFrom'))}</option>${(config.broughtFrom||[]).map(b=>`<option value="${esc(b.name)}" ${row&&row.purchaseFrom===b.name?'selected':''}>${esc(b.name)}</option>`).join('')}</select></label>
+          <label class="art-form-full">${esc(T('exp.note'))}<input type="text" id="mNote" value="${row?esc(row.note||''):''}"></label>
+        </div>
+        <div class="art-modal-preview">
+          <span>${esc(T('exp.sumItems'))}: <b id="mPvSum">0</b></span>
+          <span>${esc(T('exp.net'))}: <b id="mPvNet">0</b></span>
+        </div>
+        <div class="art-modal-actions">
+          <button class="btn btn-ghost" id="mCancel">${esc(T('cancel'))}</button>
+          <button class="btn btn-primary" id="mSave">${esc(T('save'))}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(ov);
+
+    const g = (id)=> ov.querySelector('#'+id);
+    const updatePreview = ()=>{
+      const cpp = parseFloat(g('mCost').value)||0, amt = parseFloat(g('mAmount').value)||0;
+      const ship = parseFloat(g('mShip').value)||0, disc = -Math.abs(parseFloat(g('mDisc').value)||0);
+      g('mPvSum').textContent = fmt(cpp*amt);
+      g('mPvNet').textContent = fmt(cpp*amt + ship + disc);
+    };
+    const updateId = ()=>{
+      const date = g('mDate').value, tag = g('mTag').value;
+      if(!date){ g('expIdPreview').textContent = '-'; return; }
+      if(expEditingId && date === expEditingOrigDate){
+        const r = expenses.find(e=>e.id===expEditingId);
+        g('expIdPreview').textContent = r ? r.expenseId : '-';
+      }else g('expIdPreview').textContent = generateExpenseId(date, tag, expEditingId);
+    };
+    ['mCost','mAmount','mShip','mDisc'].forEach(id=> g(id).addEventListener('input', updatePreview));
+    g('mDate').addEventListener('change', updateId);
+    g('mTag').addEventListener('change', updateId);
+    updatePreview(); updateId();
+
+    const close = ()=> ov.remove();
+    ov.addEventListener('click', e=>{ if(e.target === ov) close(); });
+    g('mCancel').addEventListener('click', close);
+    g('mSave').addEventListener('click', async ()=>{
+      const details = g('mDetails').value.trim();
+      const date = g('mDate').value, tag = g('mTag').value;
+      const costPerPiece = parseFloat(g('mCost').value)||0;
+      const amount = parseFloat(g('mAmount').value)||0;
+      const shippingFee = parseFloat(g('mShip').value)||0;
+      const discount = -Math.abs(parseFloat(g('mDisc').value)||0);
+      const purchaseFrom = g('mFrom').value.trim();
+      const note = g('mNote').value.trim();
+      if(!details){ alert(T('exp.errDetails')); return; }
+      if(!date){ alert(T('exp.errDate')); return; }
+      if(amount <= 0){ alert(T('exp.errAmount')); return; }
+      const rowData = computeRow({ id: expEditingId || rid(), date, details, tag, costPerPiece, amount, shippingFee, discount, purchaseFrom, note });
+      if(expEditingId && date === expEditingOrigDate){
+        const ex = expenses.find(e=>e.id===expEditingId);
+        rowData.expenseId = ex ? ex.expenseId : generateExpenseId(date, tag, expEditingId);
+      }else rowData.expenseId = generateExpenseId(date, tag, expEditingId);
+      if(expEditingId) expenses = expenses.map(e=> e.id===expEditingId ? rowData : e);
+      else expenses.push(rowData);
+      await saveExpenses();
+      close();
+      renderExpenseTable(body);
+    });
+  }
+
+  /* ================= Cost Summary page ================= */
+  const A_SVG_NS = 'http://www.w3.org/2000/svg';
+  function aSvg(name, attrs){ const el = document.createElementNS(A_SVG_NS, name); for(const k in attrs) el.setAttribute(k, attrs[k]); return el; }
+  function aPolar(cx, cy, r, frac){ const a = frac*2*Math.PI - Math.PI/2; return [cx + r*Math.cos(a), cy + r*Math.sin(a)]; }
+
+  function expMonthKey(dateStr){ return dateStr ? dateStr.slice(0,7) : ''; }
+  let summaryMonth = 'all';
+  // Account subpage state (income/expense ledger + VAT view).
+  let acctView = 'summary';    // summary | table
+  let acctYear = '';           // "YYYY"
+  let acctMonth = '';          // "YYYY-MM"
+  let acctVatMode = 'none';    // all | ticked | none
+  let acctTableMonth = 'all';  // month filter for the table view
+
+  function renderSummaryPage(body){
+    const months = [...new Set(expenses.map(e=> expMonthKey(e.date)))].filter(Boolean).sort().reverse();
+    body.innerHTML = `
+      <div class="panel">
+        <div class="art-toolbar">
+          <div class="art-field"><label>${esc(T('sum.period'))}</label>
+            <select id="sumMonth">
+              <option value="all" ${summaryMonth==='all'?'selected':''}>${esc(T('sum.allTime'))}</option>
+              ${months.map(m=>{ const [y,mo]=m.split('-'); return `<option value="${m}" ${summaryMonth===m?'selected':''}>${monthLabel(parseInt(mo,10))} ${y}</option>`; }).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="art-sum-cards" id="artSumCards"></div>
+        <div class="art-sum-grid">
+          <div class="art-sum-chart" id="artSumDonut"></div>
+          <div class="art-sum-tablewrap">
+            <table class="art-table">
+              <thead><tr><th>${esc(T('sum.tag'))}</th><th class="num">${esc(T('sum.netTotal'))}</th><th class="num">${esc(T('sum.percent'))}</th></tr></thead>
+              <tbody id="artSumTbody"></tbody>
+              <tfoot><tr><td>${esc(T('sum.sum'))}</td><td class="num" id="artSumTotal">0</td><td class="num">100%</td></tr></tfoot>
+            </table>
+          </div>
+        </div>
+        <div class="art-sum-split">
+          <div class="art-sum-half">
+            <h4 class="art-form-section" style="margin-top:0;">${esc(T('sum.byCategory'))}</h4>
+            <div class="art-sum-chart" id="artCostCatDonut"></div>
+          </div>
+          <div class="art-sum-half">
+            <h4 class="art-form-section" style="margin-top:0;">${esc(T('sum.byOrigin'))}</h4>
+            <div class="art-sum-chart" id="artCostOriginDonut"></div>
+          </div>
+        </div>
+      </div>`;
+    body.querySelector('#sumMonth').addEventListener('change', e=>{ summaryMonth = e.target.value; renderSummaryData(body); });
+    renderSummaryData(body);
+  }
+
+  function monthLabel(m){ return window.monthName ? window.monthName(m) : ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m]; }
+
+  function renderSummaryData(body){
+    const list = summaryMonth === 'all' ? expenses : expenses.filter(e=> expMonthKey(e.date) === summaryMonth);
+    const tags = config.expenseTags || [];
+    const totals = {};
+    tags.forEach(t=> totals[t.name] = 0);
+    list.forEach(e=>{ totals[e.tag] = (totals[e.tag]||0) + e.net; });
+    const grand = Object.values(totals).reduce((a,b)=> a+b, 0);
+
+    // Cards.
+    const count = list.length;
+    const avg = count ? grand/count : 0;
+    body.querySelector('#artSumCards').innerHTML = `
+      <div class="art-stat-card"><div class="art-stat-label">${esc(T('sum.totalNet'))}</div><div class="art-stat-value">${fmt(grand)} ฿</div></div>
+      <div class="art-stat-card"><div class="art-stat-label">${esc(T('sum.count'))}</div><div class="art-stat-value">${count}</div></div>
+      <div class="art-stat-card"><div class="art-stat-label">${esc(T('sum.avg'))}</div><div class="art-stat-value">${fmt(avg)} ฿</div></div>`;
+
+    // Tag table.
+    body.querySelector('#artSumTbody').innerHTML = tags.map(t=>{
+      const val = totals[t.name] || 0;
+      const pct = grand !== 0 ? (val/grand*100) : 0;
+      return `<tr>
+        <td><span class="art-pill" style="background:${esc(t.color)}">${esc(t.name)}</span></td>
+        <td class="num">${fmt(val)}</td>
+        <td class="num">${pct.toFixed(1)}%</td>
+      </tr>`;
+    }).join('');
+    body.querySelector('#artSumTotal').textContent = fmt(grand);
+
+    // Donut.
+    renderSummaryDonut(body.querySelector('#artSumDonut'), tags, totals, grand);
+    renderCostDonuts(body);
+  }
+
+  // Stock cost (lot cost x qty in) split by product category and by cost origin.
+  function renderCostDonuts(body){
+    const inPeriod = (l)=> summaryMonth === 'all' || expMonthKey(l.date || '') === summaryMonth;
+    const catTotals = {}, originTotals = {};
+    lots.filter(inPeriod).forEach(l=>{
+      const value = (Number(l.cost)||0) * (l.qtyIn||0);
+      if(value <= 0) return;
+      const prod = products.find(p=> p.id === l.productId);
+      const cat = (prod && prod.productType) || T('sum.uncategorised');
+      catTotals[cat] = (catTotals[cat]||0) + value;
+      const org = l.origin || T('sum.noOrigin');
+      originTotals[org] = (originTotals[org]||0) + value;
+    });
+    const catItems = Object.keys(catTotals).map(name=> ({ name: dispName('productTypes', name), color: ptypeColor(name) }));
+    const catVals = {}; Object.keys(catTotals).forEach(name=>{ catVals[dispName('productTypes', name)] = catTotals[name]; });
+    const orgItems = Object.keys(originTotals).map(name=> ({ name, color: originColor(name) }));
+    const catGrand = Object.values(catTotals).reduce((a,b)=> a+b, 0);
+    const orgGrand = Object.values(originTotals).reduce((a,b)=> a+b, 0);
+    renderSummaryDonut(body.querySelector('#artCostCatDonut'), catItems, catVals, catGrand);
+    renderSummaryDonut(body.querySelector('#artCostOriginDonut'), orgItems, originTotals, orgGrand);
+  }
+
+  function renderSummaryDonut(host, tags, totals, grand){
+    if(!host) return;
+    const items = tags.map(t=> ({ name:t.name, color:t.color, value: Math.max(0, totals[t.name]||0) })).filter(it=> it.value > 0);
+    if(grand <= 0 || items.length === 0){ host.innerHTML = `<p class="art-set-empty">${esc(T('sum.noData'))}</p>`; return; }
+    const size=200, cx=size/2, cy=size/2, rOut=88, rIn=54;
+    const svg = aSvg('svg', { viewBox:`0 0 ${size} ${size}`, class:'art-donut-svg' });
+    const total = items.reduce((s,it)=> s+it.value, 0);
+    if(items.length === 1){
+      svg.appendChild(aSvg('circle', { cx, cy, r:(rOut+rIn)/2, fill:'none', stroke:items[0].color, 'stroke-width':rOut-rIn }));
+    }else{
+      let acc = 0;
+      items.forEach(it=>{
+        const frac = it.value/total;
+        const [x1,y1]=aPolar(cx,cy,rOut,acc), [x2,y2]=aPolar(cx,cy,rOut,acc+frac);
+        const [x3,y3]=aPolar(cx,cy,rIn,acc+frac), [x4,y4]=aPolar(cx,cy,rIn,acc);
+        const large = frac > 0.5 ? 1 : 0;
+        const d = `M ${x1} ${y1} A ${rOut} ${rOut} 0 ${large} 1 ${x2} ${y2} L ${x3} ${y3} A ${rIn} ${rIn} 0 ${large} 0 ${x4} ${y4} Z`;
+        svg.appendChild(aSvg('path', { d, fill: it.color }));
+        acc += frac;
+      });
+    }
+    const lbl = aSvg('text', { x:cx, y:cy-6, 'text-anchor':'middle', 'dominant-baseline':'central', 'font-size':'20', 'font-weight':'800', fill:'var(--c-text)' });
+    lbl.textContent = fmt(grand);
+    svg.appendChild(lbl);
+    const sub = aSvg('text', { x:cx, y:cy+16, 'text-anchor':'middle', 'dominant-baseline':'central', 'font-size':'10', fill:'var(--c-muted)' });
+    sub.textContent = '฿';
+    svg.appendChild(sub);
+
+    host.innerHTML = '';
+    const wrap = document.createElement('div'); wrap.className = 'art-donut-wrap';
+    wrap.appendChild(svg);
+    const legend = document.createElement('div'); legend.className = 'art-donut-legend';
+    legend.innerHTML = items.map(it=> `<div class="art-leg-item"><span class="art-leg-dot" style="background:${it.color}"></span><span class="art-leg-name">${esc(it.name)}</span><span class="art-leg-val">${fmt(it.value)}</span></div>`).join('');
+    const col = document.createElement('div'); col.className = 'art-donut-col';
+    col.appendChild(wrap); col.appendChild(legend);
+    host.appendChild(col);
+  }
+
+  /* ================= Account subpage: monthly income/expense + VAT =================
+     Reuses the Accounting module's summary look (year/month pickers, income/
+     expense/net figures) but sourced from Simple Store orders (income) and
+     expenses. A 3-way VAT switch decides which items contribute VAT. */
+
+  function acctEntries(){
+    const inc = orders.filter(isPaidOrder).map(o=>{
+      const c = computeOrder(o);
+      return { id:o.id, src:'order', date:o.date, type:'income',
+        label:(o.customerName||'-') + (o.invoiceNumber?' · '+o.invoiceNumber:''), amount:c.net, vatable:!!o.vatable };
+    });
+    const exp = expenses.map(e=>({ id:e.id, src:'expense', date:e.date, type:'expense',
+      label:(e.tag||T('acct.expense')) + (e.purchaseFrom?' · '+e.purchaseFrom:''), amount:e.amount||0, vatable:!!e.vatable }));
+    return inc.concat(exp);
+  }
+  function acctYears(){
+    const set = new Set(acctEntries().map(e=> (e.date||'').slice(0,4)).filter(Boolean));
+    set.add(new Date().toISOString().slice(0,4));
+    return [...set].sort((a,b)=> b.localeCompare(a));
+  }
+  function acctVatOf(amount){ return amount * 7 / 107; }   // VAT-inclusive, matching the documents
+  function acctIsVatable(e){ return acctVatMode==='all' ? true : (acctVatMode==='ticked' ? !!e.vatable : false); }
+  function acctSum(list){
+    let inc=0, exp=0, outVat=0, inVat=0;
+    list.forEach(e=>{
+      if(e.type==='income'){ inc += e.amount; if(acctIsVatable(e)) outVat += acctVatOf(e.amount); }
+      else { exp += e.amount; if(acctIsVatable(e)) inVat += acctVatOf(e.amount); }
+    });
+    return { inc, exp, net:inc-exp, outVat, inVat, vatNet:outVat-inVat };
+  }
+  function acctDate(iso){
+    const d = new Date((iso||'')+'T00:00:00');
+    if(isNaN(d)) return iso || '-';
+    return String(d.getDate()).padStart(2,'0')+'/'+String(d.getMonth()+1).padStart(2,'0')+'/'+d.getFullYear();
+  }
+
+  function renderAccountPage(body){
+    body.innerHTML = `
+      <div class="panel">
+        <div class="art-acct-toggle">
+          <button type="button" class="art-acct-tab ${acctView==='summary'?'active':''}" data-av="summary">${esc(T('acct.summary'))}</button>
+          <button type="button" class="art-acct-tab ${acctView==='table'?'active':''}" data-av="table">${esc(T('acct.table'))}</button>
+        </div>
+        <div id="acctHost"></div>
+      </div>`;
+    body.querySelectorAll('[data-av]').forEach(btn=> btn.addEventListener('click', ()=>{ acctView = btn.dataset.av; renderAccountPage(body); }));
+    const host = body.querySelector('#acctHost');
+    if(acctView === 'table') renderAccountTable(host);
+    else renderAccountSummary(host);
+  }
+
+  function renderAccountSummary(host){
+    const years = acctYears();
+    if(!acctYear || !years.includes(acctYear)) acctYear = years[0];
+    const nowY = new Date().toISOString().slice(0,4), nowM = new Date().toISOString().slice(5,7);
+    if(!acctMonth || acctMonth.slice(0,4) !== acctYear) acctMonth = acctYear + '-' + (acctYear===nowY ? nowM : '01');
+    const all = acctEntries();
+    const monthList = Array.from({length:12}, (_,i)=> acctYear + '-' + String(i+1).padStart(2,'0'));
+    const m = acctSum(all.filter(e=> (e.date||'').startsWith(acctMonth)));
+    const y = acctSum(all.filter(e=> (e.date||'').startsWith(acctYear)));
+    const vatOn = acctVatMode !== 'none';
+    const sign = (n)=> (n>=0?'+':'-') + fmt(Math.abs(n));
+    host.innerHTML = `
+      <div class="acc-sum-head">
+        <h3 class="setting-title">${esc(T('acct.monthlyTitle'))}</h3>
+        <div class="acc-sum-pickers">
+          <label class="acc-sum-picker"><span>${esc(T('acct.year'))}</span>
+            <select id="acctYearSel">${years.map(yy=>`<option ${yy===acctYear?'selected':''}>${yy}</option>`).join('')}</select></label>
+          <label class="acc-sum-picker"><span>${esc(T('acct.month'))}</span>
+            <select id="acctMonthSel">${monthList.map(mm=>`<option value="${mm}" ${mm===acctMonth?'selected':''}>${esc(monthLabel(parseInt(mm.slice(5,7),10)))}</option>`).join('')}</select></label>
+        </div>
+      </div>
+      <div class="art-vat-switch">
+        <span class="art-vat-label">${esc(T('acct.vatMode'))}</span>
+        <div class="art-vat-seg" id="acctVatSeg">
+          <button type="button" data-vm="all" class="${acctVatMode==='all'?'active':''}">${esc(T('acct.vatAll'))}</button>
+          <button type="button" data-vm="ticked" class="${acctVatMode==='ticked'?'active':''}">${esc(T('acct.vatTicked'))}</button>
+          <button type="button" data-vm="none" class="${acctVatMode==='none'?'active':''}">${esc(T('acct.vatNone'))}</button>
+        </div>
+      </div>
+      <div class="acc-sum-figures">
+        <div class="acc-sum-fig"><span>${esc(T('acct.income'))}</span><b class="acc-income">+${esc(fmt(m.inc))}</b></div>
+        <div class="acc-sum-fig"><span>${esc(T('acct.expense'))}</span><b class="acc-expense">-${esc(fmt(m.exp))}</b></div>
+        <div class="acc-sum-fig"><span>${esc(T('acct.net'))}</span><b class="${m.net>=0?'acc-income':'acc-expense'}">${esc(sign(m.net))}</b></div>
+        <div class="acc-sum-fig acc-sum-fig-year"><span>${esc(T('acct.yearNet'))}</span><b class="${y.net>=0?'acc-income':'acc-expense'}">${esc(sign(y.net))}</b></div>
+      </div>
+      ${vatOn ? `<div class="acc-sum-figures art-vat-figures">
+        <div class="acc-sum-fig"><span>${esc(T('acct.outVat'))}</span><b>${esc(fmt(m.outVat))}</b></div>
+        <div class="acc-sum-fig"><span>${esc(T('acct.inVat'))}</span><b>${esc(fmt(m.inVat))}</b></div>
+        <div class="acc-sum-fig"><span>${esc(T('acct.vatNet'))}</span><b class="${m.vatNet>=0?'acc-income':'acc-expense'}">${esc(sign(m.vatNet))}</b></div>
+      </div>` : ''}
+      <div id="acctBars"></div>`;
+    host.querySelector('#acctYearSel').addEventListener('change', e=>{ acctYear = e.target.value; renderAccountSummary(host); });
+    host.querySelector('#acctMonthSel').addEventListener('change', e=>{ acctMonth = e.target.value; renderAccountSummary(host); });
+    host.querySelectorAll('[data-vm]').forEach(b=> b.addEventListener('click', ()=>{ acctVatMode = b.dataset.vm; renderAccountSummary(host); }));
+    renderAcctBars(host.querySelector('#acctBars'), all, acctYear);
+  }
+
+  function renderAcctBars(el, all, year){
+    if(!el) return;
+    const data = Array.from({length:12}, (_,i)=>{
+      const mk = year + '-' + String(i+1).padStart(2,'0');
+      const s = acctSum(all.filter(e=> (e.date||'').startsWith(mk)));
+      return { inc:s.inc, exp:s.exp };
+    });
+    const max = Math.max(1, ...data.map(d=> Math.max(d.inc, d.exp)));
+    el.innerHTML =
+      `<div class="art-bars-title">${esc(T('acct.byMonth'))}</div>`+
+      '<div class="art-bars">'+ data.map((d,i)=>
+        `<div class="art-bar-col"><div class="art-bar-pair">`+
+          `<div class="art-bar art-bar-inc" style="height:${(d.inc/max*100).toFixed(1)}%" title="+${esc(fmt(d.inc))}"></div>`+
+          `<div class="art-bar art-bar-exp" style="height:${(d.exp/max*100).toFixed(1)}%" title="-${esc(fmt(d.exp))}"></div>`+
+        `</div><div class="art-bar-lbl">${esc(monthLabel(i+1))}</div></div>`
+      ).join('') +'</div>'+
+      `<div class="art-bars-legend"><span><i class="art-dot art-bar-inc"></i>${esc(T('acct.income'))}</span><span><i class="art-dot art-bar-exp"></i>${esc(T('acct.expense'))}</span></div>`;
+  }
+
+  // VAT Calculation — every Ledger entry with the same 3-way mode the Monthly
+  // Report uses (shared state: acctVatMode + o.vatable), so ticking here shows up there.
+  function renderDeletedPage(body){
+    const can = (typeof window.roleCanAccess !== 'function') || window.roleCanAccess(window.currentRole, 'restoreDeleted');
+    const pill = (kind, id)=> `<span class="art-pill del-restore ${can?'del-restore-btn':''}" data-kind="${kind}" data-id="${esc(id)}" style="background:${can?'#6B8F71':'#8A8F80'};">${esc(T('bin.restore'))}</span>`;
+    const stamp = (r)=> esc((r.deletedBy||'-') + (r.deletedAt ? ' \u00B7 ' + _fmtEditedAt(r.deletedAt) : ''));
+    const prodRows = deletedProducts.slice().sort((a,b)=> String(b.deletedAt||'').localeCompare(String(a.deletedAt||''))).map(p=> `<tr>
+        <td class="art-id">${esc(p.sku||'-')}</td>
+        <td>${esc(p.name||'-')}</td>
+        <td>${esc(dispName('productTypes', p.productType)||'-')}</td>
+        <td class="num">${fmt(p.price)}</td>
+        <td class="num">${(p._lots||[]).reduce((sm,l)=> sm + (l.qtyIn||0), 0) || '-'}</td>
+        <td class="num">${fmt((p._lots||[]).reduce((sm,l)=> sm + (Number(l.cost)||0) * (l.qtyIn||0), 0))}</td>
+        <td class="num">${(p._expenses||[]).length || '-'}</td>
+        <td class="art-edited">${stamp(p)}</td>
+        <td>${pill('product', p.id)}</td>
+      </tr>`).join('');
+    const orderRows = deletedOrders.slice().sort((a,b)=> String(b.deletedAt||'').localeCompare(String(a.deletedAt||''))).map(o=>{
+      const c = computeOrder(o);
+      return `<tr>
+        <td>${esc(acctDate(o.date))}</td>
+        <td class="art-id">${esc(o.invoiceNumber||'-')}</td>
+        <td>${esc(o.customerName||'-')}</td>
+        <td class="num">${fmt(c.net)}</td>
+        <td class="art-edited">${stamp(o)}</td>
+        <td>${pill('order', o.id)}</td>
+      </tr>`;
+    }).join('');
+    body.innerHTML = `
+      <div class="panel">
+        <p class="setting-desc" style="margin-top:0;">${esc(T('bin.desc'))}</p>
+        <h4 class="art-form-section">${esc(T('bin.products'))} (${deletedProducts.length})</h4>
+        <div class="art-table-wrap"><table class="art-table">
+          <thead><tr><th>${esc(T('prod.sku'))}</th><th>${esc(T('prod.name'))}</th><th>${esc(T('prod.ptype'))}</th><th class="num">${esc(T('prod.price'))}</th><th class="num">${esc(T('bin.qty'))}</th><th class="num">${esc(T('bin.lotValue'))}</th><th class="num">${esc(T('bin.expenses'))}</th><th>${esc(T('bin.deletedBy'))}</th><th></th></tr></thead>
+          <tbody>${prodRows || `<tr><td colspan="9" class="art-empty">${esc(T('bin.empty'))}</td></tr>`}</tbody>
+        </table></div>
+        <h4 class="art-form-section">${esc(T('bin.orders'))} (${deletedOrders.length})</h4>
+        <div class="art-table-wrap"><table class="art-table">
+          <thead><tr><th>${esc(T('exp.date'))}</th><th>${esc(T('rev.invoiceNo'))}</th><th>${esc(T('rev.customer'))}</th><th class="num">${esc(T('exp.net'))}</th><th>${esc(T('bin.deletedBy'))}</th><th></th></tr></thead>
+          <tbody>${orderRows || `<tr><td colspan="6" class="art-empty">${esc(T('bin.empty'))}</td></tr>`}</tbody>
+        </table></div>
+      </div>`;
+    if(!can) return;
+    body.querySelectorAll('.del-restore-btn').forEach(btn=> btn.addEventListener('click', async ()=>{
+      if(!window.confirm(T('bin.confirm'))) return;
+      const id = btn.dataset.id;
+      if(btn.dataset.kind === 'product'){
+        const rec = deletedProducts.find(x=> x.id === id); if(!rec) return;
+        delete rec.deletedAt; delete rec.deletedBy;
+        const back = Array.isArray(rec._lots) ? rec._lots : [];
+        const backExp = Array.isArray(rec._expenses) ? rec._expenses : [];
+        delete rec._lots; delete rec._expenses;
+        products.push(rec);
+        deletedProducts = deletedProducts.filter(x=> x.id !== id);
+        if(back.length){ lots = lots.concat(back.filter(l=> !lots.some(x=> x.id === l.id))); await saveLots(); }
+        if(backExp.length){ expenses = expenses.concat(backExp.filter(e=> !expenses.some(x=> x.id === e.id))); await saveExpenses(); }
+        await saveProducts(); await saveDeletedProducts();
+      }else{
+        const rec = deletedOrders.find(x=> x.id === id); if(!rec) return;
+        delete rec.deletedAt; delete rec.deletedBy;
+        orders.push(rec);
+        deletedOrders = deletedOrders.filter(x=> x.id !== id);
+        await saveOrders(); await saveDeletedOrders();
+      }
+      renderDeletedPage(body);
+    }));
+  }
+  function renderVatPage(body){
+    const list = orders.filter(isPaidOrder).map(computeOrder).sort((a,b)=> String(b.date||'').localeCompare(String(a.date||'')));
+    const showChk = acctVatMode === 'ticked';
+    const rows = list.map(o=>{
+      const on = acctVatMode==='all' ? true : (acctVatMode==='ticked' ? !!o.vatable : false);
+      const vat = on ? acctVatOf(o.net) : 0;
+      const base = o.net - vat;
+      return `<tr data-id="${esc(o.id)}">
+        <td>${esc(acctDate(o.date))}</td>
+        <td class="art-id">${esc(o.invoiceNumber||'-')}</td>
+        <td>${esc(o.customerName||'-')}</td>
+        ${showChk ? `<td class="c"><input type="checkbox" class="vat-chk" ${o.vatable?'checked':''}></td>` : ''}
+        <td class="num">${fmt(o.net)}</td>
+        <td class="num">${fmt(base)}</td>
+        <td class="num ${vat?'art-vat-amt':''}">${vat ? fmt(vat) : '-'}</td>
+      </tr>`;
+    }).join('');
+    const totNet = list.reduce((sm,o)=> sm + o.net, 0);
+    const totVat = list.reduce((sm,o)=>{
+      const on = acctVatMode==='all' ? true : (acctVatMode==='ticked' ? !!o.vatable : false);
+      return sm + (on ? acctVatOf(o.net) : 0);
+    }, 0);
+    body.innerHTML = `
+      <div class="panel">
+        <div class="art-vat-switch">
+          <span class="art-vat-label">${esc(T('acct.vatMode'))}</span>
+          <div class="art-vat-seg" id="vatSeg">
+            <button type="button" data-vm="none" class="${acctVatMode==='none'?'active':''}">${esc(T('acct.vatNone'))}</button>
+            <button type="button" data-vm="ticked" class="${acctVatMode==='ticked'?'active':''}">${esc(T('acct.vatTicked'))}</button>
+            <button type="button" data-vm="all" class="${acctVatMode==='all'?'active':''}">${esc(T('acct.vatAll'))}</button>
+          </div>
+        </div>
+        <div class="art-sum-cards">
+          <div class="art-stat-card"><div class="art-stat-label">${esc(T('vat.totalNet'))}</div><div class="art-stat-value">${fmt(totNet)} ฿</div></div>
+          <div class="art-stat-card"><div class="art-stat-label">${esc(T('vat.totalBase'))}</div><div class="art-stat-value">${fmt(totNet - totVat)} ฿</div></div>
+          <div class="art-stat-card"><div class="art-stat-label">${esc(T('vat.totalVat'))}</div><div class="art-stat-value">${fmt(totVat)} ฿</div></div>
+        </div>
+        <div class="art-table-wrap">
+          <table class="art-table">
+            <thead><tr>
+              <th>${esc(T('exp.date'))}</th><th>${esc(T('rev.invoiceNo'))}</th><th>${esc(T('rev.customer'))}</th>
+              ${showChk ? `<th class="c">${esc(T('acct.vatable'))}</th>` : ''}
+              <th class="num">${esc(T('exp.net'))}</th><th class="num">${esc(T('vat.base'))}</th><th class="num">${esc(T('vat.amount'))}</th>
+            </tr></thead>
+            <tbody>${list.length ? rows : `<tr><td colspan="${showChk?7:6}" class="art-empty">${esc(T('rev.empty'))}</td></tr>`}</tbody>
+          </table>
+        </div>
+      </div>`;
+    body.querySelectorAll('#vatSeg [data-vm]').forEach(b=> b.addEventListener('click', ()=>{ acctVatMode = b.dataset.vm; renderVatPage(body); }));
+    body.querySelectorAll('.vat-chk').forEach(chk=> chk.addEventListener('change', async ()=>{
+      const id = chk.closest('tr').dataset.id;
+      const o = orders.find(x=> x.id === id); if(!o) return;
+      o.vatable = chk.checked;
+      await saveOrders(); renderVatPage(body);
+    }));
+  }
+  function renderAccountTable(host){
+    const all = acctEntries().sort((a,b)=> (b.date||'').localeCompare(a.date||''));
+    const months = [...new Set(all.map(e=> (e.date||'').slice(0,7)).filter(Boolean))].sort().reverse();
+    const list = acctTableMonth==='all' ? all : all.filter(e=> (e.date||'').slice(0,7)===acctTableMonth);
+    host.innerHTML = `
+      <div class="art-toolbar">
+        <div class="art-field"><label>${esc(T('sum.period'))}</label>
+          <select id="acctTblMonth">
+            <option value="all" ${acctTableMonth==='all'?'selected':''}>${esc(T('sum.allTime'))}</option>
+            ${months.map(mk=>{ const [y,mo]=mk.split('-'); return `<option value="${mk}" ${acctTableMonth===mk?'selected':''}>${esc(monthLabel(parseInt(mo,10)))} ${y}</option>`; }).join('')}
+          </select></div>
+        <div class="art-acct-tblnote">${esc(T('acct.tableNote'))}</div>
+      </div>
+      <table class="art-table">
+        <thead><tr><th>${esc(T('acct.date'))}</th><th>${esc(T('acct.type'))}</th><th>${esc(T('acct.item'))}</th><th class="num">${esc(T('acct.amount'))}</th><th class="c">${esc(T('acct.vatable'))}</th></tr></thead>
+        <tbody id="acctTblBody"></tbody>
+      </table>`;
+    const tb = host.querySelector('#acctTblBody');
+    tb.innerHTML = list.length ? list.map(e=>`
+      <tr data-src="${e.src}" data-id="${e.id}">
+        <td>${esc(acctDate(e.date))}</td>
+        <td><span class="art-type-badge ${e.type==='income'?'inc':'exp'}">${esc(e.type==='income'?T('acct.income'):T('acct.expense'))}</span></td>
+        <td>${esc(e.label)}</td>
+        <td class="num">${e.type==='income'?'+':'-'}${esc(fmt(e.amount))}</td>
+        <td class="c"><input type="checkbox" class="art-vat-chk" ${e.vatable?'checked':''}></td>
+      </tr>`).join('') : `<tr><td colspan="5" style="text-align:center;color:var(--c-muted);padding:24px;">${esc(T('acct.noItems'))}</td></tr>`;
+    host.querySelector('#acctTblMonth').addEventListener('change', e=>{ acctTableMonth = e.target.value; renderAccountTable(host); });
+    tb.querySelectorAll('tr[data-id]').forEach(tr=>{
+      const chk = tr.querySelector('.art-vat-chk'); if(!chk) return;
+      chk.addEventListener('change', async ()=>{
+        const src = tr.dataset.src, id = tr.dataset.id;
+        if(src==='order'){ const o = orders.find(x=> x.id===id); if(o){ o.vatable = chk.checked; await saveOrders(); } }
+        else { const x = expenses.find(y=> y.id===id); if(x){ x.vatable = chk.checked; await saveExpenses(); } }
+      });
+    });
+  }
+
   /* ================= Revenue / Orders page ================= */
-  // Discount amount for a base value — used by computeOrder AND the commission maths.
-  const dAmt = (base, val, type)=> (type === 'percent' ? base * (Math.abs(val)||0) / 100 : Math.abs(val)||0);
   function computeOrder(o){
+    const dAmt=(base,val,type)=> (type==='percent'? base*(Math.abs(val)||0)/100 : Math.abs(val)||0);
     const itemsTotal = (o.items||[]).reduce((s,it)=> s + (it.qty*it.price), 0);
     const itemsNet = (o.items||[]).reduce((s,it)=>{ const gr=(it.qty||0)*(it.price||0); return s + (gr - dAmt(gr, it.discount, it.discountType)); }, 0);
     const shipping = o.shippingCost||0;
     const sub = itemsNet + shipping;
     const overallAmt = dAmt(sub, o.overallDiscount, o.overallDiscountType);
-    const netBase = sub - overallAmt;
-    // Shipping billed SEPARATELY is outside the VAT base — only the goods are taxed.
-    const goodsBase = Math.max(0, itemsNet - overallAmt);
-    const split = o.docSplit === 'split';
-    const vatBase = split ? goodsBase : netBase;
-    const vat = o.vatable ? vatBase * 0.07 : 0;
-    const net = netBase + vat;
-    return { ...o, itemsTotal, itemsNet, itemDiscTotal: itemsTotal - itemsNet, shipping, overallAmt, goodsBase, netBase, vatBase, vat, net };
+    const net = sub - overallAmt;
+    return { ...o, itemsTotal, itemsNet, itemDiscTotal: itemsTotal - itemsNet, shipping, overallAmt, net };
   }
   // Running numbers come from a COUNTER kept on config, never from "how many
   // records exist today" — deleting a record must not free its number for reuse.
@@ -1253,65 +1729,13 @@
     return `${prefix}-${code}-${String(nextSeq('order', dateStr)).padStart(3,'0')}`;
   }
   // Cost of goods sold for one order = what the allocated cost lots actually cost.
-  // Commission rate for a product category (percent).
-  function commissionRateOf(cat){
-    const c = config.commission || {};
-    const r = (c.rates || {})[cat];
-    return r == null ? 5 : (Number(r) || 0);
-  }
-  // Commission is paid on PROFIT, not on turnover: work the profit out first,
-  // then apply the category's percentage to it.
-  //
-  // Per line: revenue - cost of those goods - its share of the bill-level
-  // deductions (overall discount, platform fee, delivery fee). A line that ends
-  // up at or below zero pays no commission — nobody earns a cut of a loss.
-  function orderCommission(o){
-    const c = config.commission || {};
-    const co = computeOrder(o);
-    const _se = sellExpOf(o);
-    const deductions = orderPlatformFee(o) + _se.delivery + _se.other + (co.overallAmt || 0);
-    const lines = (o.items || []).map(it=>{
-      const gross = (it.qty||0) * (it.price||0);
-      const net = gross - dAmt(gross, it.discount, it.discountType);
-      const cost = (it.costAllocation || []).reduce((x,a)=> x + (Number(a.cost)||0) * (a.qty||0), 0);
-      const prod = products.find(x=> x.id === it.productId);
-      return { net, cost, cat: (prod && prod.productType) || '' };
-    });
-    const totalNet = lines.reduce((sm,l)=> sm + l.net, 0);
-    let comm = 0, profitBase = 0;
-    lines.forEach(l=>{
-      const share = totalNet > 0 ? (l.net / totalNet) : 0;
-      const profit = l.net - l.cost - deductions * share;
-      if(profit <= 0) return;
-      profitBase += profit;
-      comm += profit * commissionRateOf(l.cat) / 100;
-    });
-    // Shipping counts only when the base includes it; with no real delivery cost
-    // recorded yet, its whole charge is treated as margin.
-    if(c.base === 'goodsShip' && co.shipping > 0){
-      const avg = profitBase > 0 ? (comm / profitBase * 100) : 5;
-      comm += co.shipping * avg / 100;
-    }
-    return comm;
-  }
-  // What the platform takes: the stored % of the bill plus any flat fee.
-  function orderPlatformFee(o){
-    const co = computeOrder(o);
-    const base = co.netBase != null ? co.netBase : co.net;
-    return base * ((Number(o.platformFee) || 0) / 100) + (Number(o.platformFeeAmount) || 0);
-  }
-  // Costs of selling a bill, entered by hand on the Selling Expenses page.
-  function sellExpOf(o){
-    const e = o.sellExpense || {};
-    return { delivery: Number(e.delivery) || 0, other: Number(e.other) || 0, note: e.note || '' };
-  }
   function orderCOGS(o){
     return (o.items||[]).reduce((sm,it)=>
       sm + (it.costAllocation||[]).reduce((x,a)=> x + (Number(a.cost)||0) * (a.qty||0), 0), 0);
   }
   // Gross profit: revenue on the bill minus that cost. Delivery fuel/labour is
   // NOT in here yet (parked in the To-Do list).
-  function orderProfit(o){ const c = computeOrder(o); return (c.netBase != null ? c.netBase : c.net) - orderCOGS(o); }   // VAT is not income
+  function orderProfit(o){ const c = computeOrder(o); return c.net - orderCOGS(o); }
   function itemsSummary(items){ return (items||[]).map(it=>{ const c = itemColorLabel(it); return `${it.productName}${c?' ('+c+')':''} x${it.qty}`; }).join(', '); }
   function ordColor(group, name){ return colorOf(group, name); }
   async function saveOrders(){ await window.Store.set(K_ORDERS, orders); syncDeliveries(); syncPublicStock(); }
@@ -1319,6 +1743,7 @@
 
   function ordersFiltered(){
     return orders.filter(o=>{
+      if(_ledgerMode && !isPaidOrder(o)) return false;   // Ledger = paid invoices only
       if(ordFilter.from && o.date < ordFilter.from) return false;
       if(ordFilter.to && o.date > ordFilter.to) return false;
       if(ordFilter.orderStatus !== 'all' && o.orderStatus !== ordFilter.orderStatus) return false;
@@ -1348,15 +1773,15 @@
           </div>
           <button class="btn btn-ghost" id="ordClearFilter">${esc(T('exp.clearFilter'))}</button>
           <div class="art-spacer"></div>
-          <button class="btn btn-primary" id="ordAdd">${esc(T('rev.add'))}</button>
+          ${_ledgerMode ? '' : `<button class="btn btn-primary" id="ordAdd">${esc(T('rev.add'))}</button>`}
         </div>
         <div class="art-table-wrap">
-          <table class="art-table sell-table" id="ordTable">
+          <table class="art-table${_ledgerMode?' led-table':''}" id="ordTable">
             <thead><tr>
               <th>${esc(T('exp.date'))}</th><th>${esc(T('rev.invoiceNo'))}</th><th>${esc(T('rev.customer'))}</th>
               <th>${esc(T('rev.platform'))}</th><th>${esc(T('rev.items'))}</th><th class="num">${esc(T('exp.discount'))}</th>
               <th class="num">${esc(T('exp.net'))}</th><th>${esc(T('exp.tag'))}</th>
-              <th>${esc(T('rev.orderStatus'))}</th><th>${esc(T('rev.invoiceStatus'))}</th><th>${esc(T('pay.mode'))}</th><th class="num">${esc(T('pay.paid'))}</th><th class="num">${esc(T('pay.pending'))}</th><th>${esc(T('rev.deliveryMethod'))}</th><th>${esc(T('rev.responsible'))}</th><th>${esc(T('sell.seller'))}</th><th>${esc(T('col.lastEdited'))}</th><th class="c sell-sticky-vat">${esc(T('pay.vat'))}</th><th class="art-sticky-actions"></th>
+              <th>${esc(T('rev.orderStatus'))}</th><th>${esc(T('rev.invoiceStatus'))}</th><th>${esc(T('rev.deliveryMethod'))}</th><th>${esc(T('rev.responsible'))}</th><th>${esc(T('col.lastEdited'))}</th>${_ledgerMode ? `<th class="num">${esc(T('acct.cogs'))}</th><th class="num">${esc(T('acct.profit'))}</th><th class="c led-sticky-vat">${esc(T('acct.vatable'))}</th><th class="led-sticky-ver">${esc(T('del.verified'))}</th>` : ''}<th class="art-sticky-actions"></th>
             </tr></thead>
             <tbody id="ordTbody"></tbody>
             <tfoot><tr>
@@ -1373,1658 +1798,14 @@
     body.querySelector('#ordIsFilter').addEventListener('change', e=>{ ordFilter.invoiceStatus=e.target.value; renderOrdersTable(body); });
     body.querySelector('#ordTagFilter').addEventListener('change', e=>{ ordFilter.tag=e.target.value; renderOrdersTable(body); });
     body.querySelector('#ordClearFilter').addEventListener('click', ()=>{ ordFilter={from:'',to:'',orderStatus:'all',invoiceStatus:'all',tag:'all'}; renderRevenuePage(body); });
-    body.querySelector('#ordAdd').addEventListener('click', ()=> openOrderModal(null, body, ()=> renderRevenuePage(body)));
+    const _ordAdd = body.querySelector('#ordAdd');
+    if(_ordAdd) _ordAdd.addEventListener('click', ()=> openOrderModal(null, body, ()=> renderRevenuePage(body)));
     renderOrdersTable(body);
   }
 
-  // Donut built from stroke-dasharray segments — no arc maths, no DOM juggling.
-  // items = [{ name, value, color }]
-  function acctDonutHtml(items, centerMain, centerSub){
-    const total = items.reduce((sm,i)=> sm + (i.value||0), 0);
-    const R = 62, W = 22, C = 2 * Math.PI * R;
-    let offset = 0;
-    const segs = total > 0 ? items.filter(i=> i.value > 0).map(i=>{
-      const len = C * (i.value / total);
-      const seg = `<circle cx="80" cy="80" r="${R}" fill="none" stroke="${esc(i.color)}" stroke-width="${W}" stroke-dasharray="${len.toFixed(2)} ${(C-len).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 80 80)"></circle>`;
-      offset += len;
-      return seg;
-    }).join('') : `<circle cx="80" cy="80" r="${R}" fill="none" stroke="var(--c-border)" stroke-width="${W}"></circle>`;
-    return `<div class="acct-donut">
-      <svg viewBox="0 0 160 160" class="acct-donut-svg">${segs}
-        <text x="80" y="76" text-anchor="middle" dominant-baseline="central" class="acct-donut-main">${esc(centerMain)}</text>
-        <text x="80" y="96" text-anchor="middle" dominant-baseline="central" class="acct-donut-sub">${esc(centerSub||'')}</text>
-      </svg>
-      <div class="acct-donut-legend">${items.map(i=> `<div class="art-leg-item"><span class="art-leg-dot" style="background:${esc(i.color)}"></span><span class="art-leg-name">${esc(i.name)}</span><span class="art-leg-val">${i.value}</span></div>`).join('') || `<span class="art-set-empty">${esc(T('inv.empty'))}</span>`}</div>
-    </div>`;
-  }
-  const billFilters = { invoicing:{ from:'', to:'', vat:'all' }, receipts:{ from:'', to:'', vat:'all' } };
-  // Only an admin (or the dev account) may verify a bill — this is a sign-off,
-  // not an everyday edit.
-  function isAdminActor(){
-    const e = window.currentEmployee;
-    if(!e) return false;
-    if(e.roleKey === 'developer' || e.roleKey === 'admin') return true;
-    return ((typeof window.roleTypeOf === 'function') ? window.roleTypeOf(e.roleKey) : '') === 'admin';
-  }
-  // Invoicing (not yet paid) and Receipts (paid) are the same READ-ONLY table over
-  // different halves of the order list, so they share one renderer.
-  // Frozen columns used to be positioned with hard-coded px offsets, which
-  // overlapped or left gaps as soon as the content changed width. Measure the
-  // real header widths (right to left) and pin each column to the running total.
-  const STICKY_ORDER = ['art-sticky-actions', 'led-sticky-ver', 'led-sticky-vat', 'led-sticky-seller', 'sell-sticky-vat'];
-  function syncStickyCols(table){
-    if(!table || typeof table.querySelector !== 'function') return;
-    let acc = 0;
-    STICKY_ORDER.forEach(cls=>{
-      const th = table.querySelector('th.' + cls);
-      if(!th) return;
-      const w = Math.round(th.getBoundingClientRect ? th.getBoundingClientRect().width : (th.offsetWidth || 0));
-      table.querySelectorAll('th.' + cls + ', td.' + cls).forEach(cell=>{ cell.style.right = acc + 'px'; });
-      acc += w;
-    });
-  }
-  // Horizontal bars for small comparisons (paid vs unpaid, etc).
-  function acctBarsHtml(items){
-    const max = items.reduce((m,i)=> Math.max(m, i.value||0), 0) || 1;
-    return `<div class="acct-bars">${items.map(i=> `
-      <div class="acct-bar-row">
-        <div class="acct-bar-label">${esc(i.name)}</div>
-        <div class="acct-bar-track"><div class="acct-bar-fill" style="width:${Math.max(2, Math.round((i.value||0)/max*100))}%; background:${esc(i.color||'#5B8FB0')}"></div></div>
-        <div class="acct-bar-val">${fmtD(i.value)}</div>
-      </div>`).join('')}</div>`;
-  }
-
-  function renderAccountingSetting(body){
-    const rerender = ()=> renderAccountingSetting(body);
-    body.innerHTML = renderConfigShell(
-      groupHtml('expenseCategories', T('set.expenseCategories')));
-    wireGroups(body.querySelector('#artSetGroups'), body, rerender);
-  }
-  function renderCommissionSetting(body){
-    const c = config.commission || (config.commission = { mode:'pool', base:'goods', rates:{} });
-    const cats = config.productTypes || [];
-    const sellers = (typeof window.employeesByRoleType === 'function' ? window.employeesByRoleType('salesperson') : []);
-    body.innerHTML = `
-      <div class="panel">
-        <h4 class="art-form-section" style="margin-top:0;">${esc(T('comm.payout'))}</h4>
-        <div class="del-seg" id="cmMode">
-          <button type="button" class="del-seg-btn ${c.mode!=='person'?'active':''}" data-m="pool">${esc(T('comm.pool'))}</button>
-          <button type="button" class="del-seg-btn ${c.mode==='person'?'active':''}" data-m="person">${esc(T('comm.person'))}</button>
-        </div>
-        <p class="setting-desc">${esc(T('comm.payoutHint'))} \u00B7 ${esc(T('comm.sellerCount'))}: <b>${sellers.length}</b></p>
-
-        <h4 class="art-form-section">${esc(T('comm.base'))}</h4>
-        <div class="del-seg" id="cmBase">
-          <button type="button" class="del-seg-btn ${c.base!=='goodsShip'?'active':''}" data-b="goods">${esc(T('comm.baseGoods'))}</button>
-          <button type="button" class="del-seg-btn ${c.base==='goodsShip'?'active':''}" data-b="goodsShip">${esc(T('comm.baseGoodsShip'))}</button>
-        </div>
-
-        <h4 class="art-form-section">${esc(T('comm.rates'))}</h4>
-        <p class="setting-desc" style="margin-top:-6px;">${esc(T('comm.ratesHint'))}</p>
-        <p class="setting-desc art-profit" style="margin-top:-2px;">${esc(T('comm.profitBase'))}</p>
-        <div class="art-set-list">
-          <div class="art-set-headrow">
-            <span class="art-set-swatch" style="visibility:hidden;"></span>
-            <span class="art-set-h art-set-h-name">${esc(T('prod.ptype'))}</span>
-            <span class="art-set-h art-set-h-fee">%</span>
-          </div>
-          ${cats.length ? cats.map(t=> `
-            <div class="cm-row">
-              <span class="art-set-swatch" style="background:${esc(t.color||'#888')}"></span>
-              <span class="cm-name">${esc(itemLabel(t))}</span>
-              <span class="art-set-fee"><input type="number" class="art-set-feeinp cm-rate" data-cat="${esc(t.name)}" value="${commissionRateOf(t.name)}" step="0.1" min="0">%</span>
-            </div>`).join('') : `<p class="art-set-empty">${esc(T('comm.noCats'))}</p>`}
-        </div>
-      </div>`;
-    body.querySelectorAll('#cmMode [data-m]').forEach(b=> b.addEventListener('click', async ()=>{
-      c.mode = b.dataset.m; await saveConfig(); renderCommissionSetting(body);
-    }));
-    body.querySelectorAll('#cmBase [data-b]').forEach(b=> b.addEventListener('click', async ()=>{
-      c.base = b.dataset.b; await saveConfig(); renderCommissionSetting(body);
-    }));
-    body.querySelectorAll('.cm-rate').forEach(inp=> inp.addEventListener('change', async ()=>{
-      c.rates[inp.dataset.cat] = parseFloat(inp.value) || 0;
-      await saveConfig();
-    }));
-  }
-
-  /* ================= Financial Report =================
-   * Three views over one shared period: an Overview (where the business stands
-   * today), a Profit & Loss statement (did we earn anything?) and a Cash Flow
-   * list (did the money actually move?). Everything is derived from data the
-   * app already holds — orders, cost lots, selling expenses, AP and opex.
-   */
-  let finFilter = { from:'', to:'' };
-  const finMonthKey = (d)=> String(d||'').slice(0,7);
-  function finInRange(dateStr){
-    const f = finFilter;
-    return (!f.from || (dateStr||'') >= f.from) && (!f.to || (dateStr||'') <= f.to);
-  }
-  // Everything one bill contributes, already netted of VAT.
-  function finBill(o){
-    const co = computeOrder(o);
-    const rev = co.netBase != null ? co.netBase : co.net;
-    const se = sellExpOf(o);
-    const cogs = orderCOGS(o);
-    const pfee = orderPlatformFee(o);
-    const comm = orderCommission(o);
-    return { o, co, rev, cogs, pfee, dfee: se.delivery, ofee: se.other, comm,
-             gross: rev - cogs,
-             net: rev - cogs - pfee - se.delivery - se.other - comm,
-             vat: co.vat || 0,
-             cashIn: isPaidOrder(o) ? co.net : (Number(o.paidAmount) || 0) };
-  }
-  // Stock purchases: what we owe suppliers and what we have actually paid them.
-  function finStockIn(){
-    return stockLog.filter(e=> (e.qty||0) > 0).map(e=>{
-      const ap = e.ap || {};
-      const amount = (Number(e.cost)||0) * (e.qty||0);
-      const paid = ap.status === 'paid' ? amount : (Number(ap.paid) || 0);
-      return { e, amount, paid, owed: Math.max(0, amount - paid) };
-    });
-  }
-  function finTotals(){
-    const bills = orders.filter(o=> finInRange(o.date)).map(finBill);
-    const ox = opex.filter(e=> finInRange(e.date));
-    const stock = finStockIn().filter(x=> finInRange(x.e.date));
-    const sum = (arr, k)=> arr.reduce((s,x)=> s + (Number(x[k])||0), 0);
-    const revenue = sum(bills,'rev');
-    const cogs = sum(bills,'cogs');
-    const pfee = sum(bills,'pfee'), dfee = sum(bills,'dfee'), ofee = sum(bills,'ofee'), comm = sum(bills,'comm');
-    const selling = pfee + dfee + ofee + comm;
-    const opexTotal = ox.reduce((s,e)=> s + (Number(e.amount)||0), 0);
-    const gross = revenue - cogs;
-    const net = gross - selling - opexTotal;
-    return {
-      bills, ox, stock, revenue, cogs, gross, pfee, dfee, ofee, comm, selling, opexTotal, net,
-      margin: revenue ? (net / revenue * 100) : 0,
-      grossMargin: revenue ? (gross / revenue * 100) : 0,
-      vat: sum(bills,'vat'),
-      cashIn: sum(bills,'cashIn'),
-      cashOut: sum(stock,'paid') + opexTotal
-    };
-  }
-  // Month buckets for the trend charts (n months back from the filter's end).
-  function finMonths(n){
-    const end = finFilter.to || (window.localIso ? window.localIso() : new Date().toISOString().slice(0,10));
-    const d = new Date(end.slice(0,4), Number(end.slice(5,7)) - 1, 1);
-    const out = [];
-    for(let i = n - 1; i >= 0; i--){
-      const m = new Date(d.getFullYear(), d.getMonth() - i, 1);
-      out.push(`${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,'0')}`);
-    }
-    return out;
-  }
-  function finMonthStats(key){
-    const bills = orders.filter(o=> finMonthKey(o.date) === key).map(finBill);
-    const ox = opex.filter(e=> finMonthKey(e.date) === key).reduce((s,e)=> s + (Number(e.amount)||0), 0);
-    const sum = (arr, k)=> arr.reduce((s,x)=> s + (Number(x[k])||0), 0);
-    const revenue = sum(bills,'rev');
-    const net = sum(bills,'net') - ox;
-    return { key, revenue, net, cogs: sum(bills,'cogs'), opex: ox, cashIn: sum(bills,'cashIn') };
-  }
-  // Months that actually contain data, newest first, with the current month always present.
-  function finMonthOptions(){
-    const keys = new Set();
-    orders.forEach(o=>{ if(o.date) keys.add(finMonthKey(o.date)); });
-    opex.forEach(e=>{ if(e.date) keys.add(finMonthKey(e.date)); });
-    stockLog.forEach(e=>{ if(e.date) keys.add(finMonthKey(e.date)); });
-    const now = new Date();
-    keys.add(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`);
-    return [...keys].filter(Boolean).sort().reverse();
-  }
-  const finMonthBounds = (key)=>{
-    const y = Number(key.slice(0,4)), m = Number(key.slice(5,7));
-    const last = new Date(y, m, 0).getDate();
-    return { from: `${key}-01`, to: `${key}-${String(last).padStart(2,'0')}` };
-  };
-  // Which month is selected right now — '' = all time, 'custom' = a hand-made range.
-  function finSelectedMonth(){
-    if(!finFilter.from && !finFilter.to) return '';
-    const k = finMonthKey(finFilter.from);
-    const b = finMonthBounds(k || '');
-    return (k && finFilter.from === b.from && finFilter.to === b.to) ? k : 'custom';
-  }
-  function finMonthLabel(key){
-    const en = (window.appLang && window.appLang()) === 'en';
-    const m = Number(key.slice(5,7)) - 1;
-    return (en ? _MONTHS_EN : _MONTHS_TH)[m] + ' ' + key.slice(0,4);
-  }
-  function finToolbar(){
-    const sel = finSelectedMonth();
-    return `
-      <div class="art-toolbar">
-        <div class="art-field"><label>${esc(T('fin.month'))}</label>
-          <select id="finMonth">
-            <option value="" ${sel===''?'selected':''}>${esc(T('fin.allTime'))}</option>
-            ${sel==='custom' ? `<option value="custom" selected>${esc(T('fin.custom'))}</option>` : ''}
-            ${finMonthOptions().map(k=> `<option value="${k}" ${sel===k?'selected':''}>${esc(finMonthLabel(k))}</option>`).join('')}
-          </select>
-        </div>
-        <div class="art-field"><label>${esc(T('exp.from'))}</label><input type="date" id="finFrom" value="${esc(finFilter.from)}"></div>
-        <div class="art-field"><label>${esc(T('exp.to'))}</label><input type="date" id="finTo" value="${esc(finFilter.to)}"></div>
-        <button class="btn btn-ghost" id="finClear">${esc(T('exp.clearFilter'))}</button>
-      </div>`;
-  }
-  function finWireToolbar(body, redraw){
-    body.querySelector('#finFrom').addEventListener('change', e=>{ finFilter.from = e.target.value; redraw(); });
-    body.querySelector('#finTo').addEventListener('change', e=>{ finFilter.to = e.target.value; redraw(); });
-    body.querySelector('#finMonth').addEventListener('change', e=>{
-      const v = e.target.value;
-      if(v === 'custom') return;                    // leave the hand-made range alone
-      finFilter = v ? finMonthBounds(v) : { from:'', to:'' };
-      redraw();
-    });
-    body.querySelector('#finClear').addEventListener('click', ()=>{ finFilter = { from:'', to:'' }; redraw(); });
-  }
-  function renderFinPage(body, view){
-    const redraw = ()=> renderFinPage(body, view);
-    if(view === 'pnl') finPnl(body);
-    else if(view === 'cash') finCash(body);
-    else if(view === 'tax') finTax(body);
-    else finOverview(body);
-    finWireToolbar(body, redraw);
-  }
-
-  /* ---- Overview: where the business stands right now ---- */
-  function finOverview(body){
-    const t = finTotals();
-    // Money owed in both directions — these ignore the period on purpose:
-    // a debt is a debt no matter when it was raised.
-    const arRows = orders.map(computeOrder).filter(o=> pendingOf(o) > 0);
-    const arTotal = arRows.reduce((s,o)=> s + pendingOf(o), 0);
-    const apRows = finStockIn().filter(x=> x.owed > 0);
-    const apTotal = apRows.reduce((s,x)=> s + x.owed, 0);
-    const stockVal = stockValuationRows().reduce((s,r)=> s + r.cost, 0);
-    const lossBills = t.bills.filter(b=> b.net < 0);
-
-    const byPlatform = {};
-    t.bills.forEach(b=>{ const k = b.o.platform || T('sum.uncategorised'); byPlatform[k] = (byPlatform[k]||0) + b.rev; });
-    const platItems = Object.keys(byPlatform).map(n=> ({ name: dispName('platforms', n) || n, value: Math.round(byPlatform[n]), color: colorOf('platforms', n) })).sort((a,b)=> b.value - a.value);
-    const costItems = [
-      { name: T('acct.cogs'),        value: Math.round(t.cogs),      color:'#7C6A55' },
-      { name: T('cogs.pfee'),        value: Math.round(t.pfee),      color:'#5B8FB0' },
-      { name: T('cogs.dfee'),        value: Math.round(t.dfee),      color:'#4FA5A0' },
-      { name: T('se.other'),         value: Math.round(t.ofee),      color:'#9B7BB5' },
-      { name: T('cogs.commission'),  value: Math.round(t.comm),      color:'#C99A4E' },
-      { name: T('nav.opExpense'),    value: Math.round(t.opexTotal), color:'#C6432E' }
-    ].filter(i=> i.value > 0);
-
-    body.innerHTML = `
-      <div class="panel">
-        ${finToolbar()}
-        <div class="art-sum-cards">
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('cogs.revenue'))}</div><div class="art-stat-value">${fmtD(t.revenue)} ฿</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('cogs.profit'))}</div><div class="art-stat-value art-profit">${fmtD(t.gross)} ฿</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('fin.netProfit'))}</div><div class="art-stat-value ${t.net < 0 ? 'art-pending-due' : 'art-profit'}">${fmtD(t.net)} ฿</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('cogs.margin'))}</div><div class="art-stat-value">${t.revenue ? t.margin.toFixed(1)+'%' : '-'}</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('fin.cashIn'))}</div><div class="art-stat-value art-profit">${fmtD(t.cashIn)} ฿</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('fin.cashOut'))}</div><div class="art-stat-value art-pending-due">${fmtD(t.cashOut)} ฿</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('fin.ar'))}</div><div class="art-stat-value art-pending-due">${fmtD(arTotal)} ฿</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('fin.ap'))}</div><div class="art-stat-value art-pending-due">${fmtD(apTotal)} ฿</div></div>
-        </div>
-
-        <div class="acct-summary" style="grid-template-columns:1fr 1fr;">
-          <div class="acct-summary-chart">
-            <h4 class="art-form-section" style="margin-top:0;">${esc(T('fin.revByPlatform'))}</h4>
-            ${acctDonutHtml(platItems, fmt(Math.round(t.revenue)), T('fin.revShort'))}
-          </div>
-          <div class="acct-summary-chart">
-            <h4 class="art-form-section" style="margin-top:0;">${esc(T('fin.costMix'))}</h4>
-            ${acctDonutHtml(costItems, fmt(Math.round(t.cogs + t.selling + t.opexTotal)), T('ox.short'))}
-          </div>
-        </div>
-
-        <h4 class="art-form-section">${esc(T('fin.health'))}</h4>
-        <p class="setting-desc" style="margin-top:-6px;">${esc(T('fin.healthHint'))}</p>
-        <div class="art-table-wrap">
-          <table class="art-table">
-            <thead><tr><th>${esc(T('fin.item'))}</th><th class="num">${esc(T('fin.count'))}</th><th class="num">${esc(T('ox.amount'))}</th><th>${esc(T('fin.note'))}</th></tr></thead>
-            <tbody>
-              <tr><td>${esc(T('fin.hAr'))}</td><td class="num">${arRows.length}</td><td class="num art-pending-due">${fmtD(arTotal)}</td><td class="setting-desc">${esc(T('fin.hArNote'))}</td></tr>
-              <tr><td>${esc(T('fin.hAp'))}</td><td class="num">${apRows.length}</td><td class="num art-pending-due">${fmtD(apTotal)}</td><td class="setting-desc">${esc(T('fin.hApNote'))}</td></tr>
-              <tr><td>${esc(T('fin.hStock'))}</td><td class="num">-</td><td class="num">${fmtD(stockVal)}</td><td class="setting-desc">${esc(T('fin.hStockNote'))}</td></tr>
-              <tr><td>${esc(T('fin.hLoss'))}</td><td class="num">${lossBills.length}</td><td class="num ${lossBills.length?'art-pending-due':''}">${fmtD(lossBills.reduce((s,b)=> s + b.net, 0))}</td><td class="setting-desc">${esc(T('fin.hLossNote'))}</td></tr>
-              <tr><td>${esc(T('fin.hVat'))}</td><td class="num">-</td><td class="num">${fmtD(t.vat)}</td><td class="setting-desc">${esc(T('fin.hVatNote'))}</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>`;
-  }
-
-  /* ---- Profit & Loss ---- */
-  function finPnl(body){
-    const t = finTotals();
-    const pct = (v)=> t.revenue ? (v / t.revenue * 100).toFixed(1) + '%' : '-';
-    const line = (label, value, opts)=>{
-      const o = opts || {};
-      return `<tr class="${o.cls||''}">
-        <td class="${o.indent?'pnl-indent':''}">${esc(label)}</td>
-        <td class="num ${o.neg?'art-pending-due':''}">${o.neg && value ? '-' : ''}${fmtD(Math.abs(value))}</td>
-        <td class="num">${pct(value)}</td>
-      </tr>`;
-    };
-    const opexByCat = {};
-    t.ox.forEach(e=>{ const k = e.category || T('sum.uncategorised'); opexByCat[k] = (opexByCat[k]||0) + (Number(e.amount)||0); });
-
-    const months = finMonths(6).map(finMonthStats);
-    const revBars = months.map(m=> ({ name: m.key, value: Math.round(m.revenue), color:'#5B8FB0' }));
-    const netBars = months.map(m=> ({ name: m.key, value: Math.round(m.net), color: m.net < 0 ? '#C6432E' : '#6B8F71' }));
-
-    body.innerHTML = `
-      <div class="panel">
-        ${finToolbar()}
-        <div class="art-sum-cards">
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('cogs.revenue'))}</div><div class="art-stat-value">${fmtD(t.revenue)} ฿</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('cogs.profit'))}</div><div class="art-stat-value art-profit">${fmtD(t.gross)} ฿</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('fin.netProfit'))}</div><div class="art-stat-value ${t.net<0?'art-pending-due':'art-profit'}">${fmtD(t.net)} ฿</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('cogs.margin'))}</div><div class="art-stat-value">${t.revenue ? t.margin.toFixed(1)+'%' : '-'}</div></div>
-        </div>
-
-        <div class="art-table-wrap">
-          <table class="art-table pnl-table">
-            <thead><tr><th>${esc(T('fin.statement'))}</th><th class="num">${esc(T('ox.amount'))}</th><th class="num">${esc(T('fin.ofRevenue'))}</th></tr></thead>
-            <tbody>
-              ${line(T('fin.revenue'), t.revenue, { cls:'pnl-head' })}
-              ${line(T('acct.cogs'), t.cogs, { indent:true, neg:true })}
-              ${line(T('cogs.profit'), t.gross, { cls:'pnl-sub' })}
-              <tr class="pnl-gap"><td colspan="3">${esc(T('fin.sellingExp'))}</td></tr>
-              ${line(T('cogs.pfee'), t.pfee, { indent:true, neg:true })}
-              ${line(T('cogs.dfee'), t.dfee, { indent:true, neg:true })}
-              ${line(T('se.other'), t.ofee, { indent:true, neg:true })}
-              ${line(T('cogs.commission'), t.comm, { indent:true, neg:true })}
-              ${line(T('fin.afterSelling'), t.gross - t.selling, { cls:'pnl-sub' })}
-              <tr class="pnl-gap"><td colspan="3">${esc(T('nav.opExpense'))}</td></tr>
-              ${Object.keys(opexByCat).length
-                  ? Object.keys(opexByCat).map(k=> line(dispName('expenseCategories', k) || k, opexByCat[k], { indent:true, neg:true })).join('')
-                  : `<tr><td class="pnl-indent setting-desc" colspan="3">${esc(T('fin.noOpex'))}</td></tr>`}
-              ${line(T('fin.netProfit'), t.net, { cls:'pnl-total' })}
-            </tbody>
-          </table>
-        </div>
-
-        <div class="acct-summary" style="grid-template-columns:1fr 1fr;">
-          <div class="acct-summary-chart">
-            <h4 class="art-form-section" style="margin-top:0;">${esc(T('fin.revTrend'))}</h4>
-            ${acctBarsHtml(revBars)}
-          </div>
-          <div class="acct-summary-chart">
-            <h4 class="art-form-section" style="margin-top:0;">${esc(T('fin.netTrend'))}</h4>
-            ${acctBarsHtml(netBars)}
-            <p class="setting-desc" style="margin:8px 0 0;">${esc(T('fin.trendHint'))}</p>
-          </div>
-        </div>
-
-        <h4 class="art-form-section">${esc(T('fin.byMonth'))}</h4>
-        <div class="art-table-wrap">
-          <table class="art-table">
-            <thead><tr><th>${esc(T('fin.month'))}</th><th class="num">${esc(T('cogs.revenue'))}</th><th class="num">${esc(T('acct.cogs'))}</th><th class="num">${esc(T('nav.opExpense'))}</th><th class="num">${esc(T('fin.netProfit'))}</th><th class="num">${esc(T('cogs.margin'))}</th></tr></thead>
-            <tbody>${months.slice().reverse().map(m=> `
-              <tr>
-                <td>${esc(m.key)}</td>
-                <td class="num">${fmtD(m.revenue)}</td>
-                <td class="num">${fmtD(m.cogs)}</td>
-                <td class="num">${fmtD(m.opex)}</td>
-                <td class="num ${m.net<0?'art-pending-due':'art-profit'}">${fmtD(m.net)}</td>
-                <td class="num">${m.revenue ? (m.net/m.revenue*100).toFixed(1)+'%' : '-'}</td>
-              </tr>`).join('')}</tbody>
-          </table>
-        </div>
-      </div>`;
-  }
-
-  /* ---- Cash Flow: when money actually moved ---- */
-  function finCash(body){
-    const t = finTotals();
-    const moves = [];
-    t.bills.forEach(b=>{ if(b.cashIn > 0) moves.push({ date: b.o.date, type:'in', label: T('fin.mCustomer') + ' \u00B7 ' + (b.o.invoiceNumber || ''), who: b.o.customerName || '', amount: b.cashIn }); });
-    t.stock.forEach(x=>{ if(x.paid > 0) moves.push({ date: x.e.date, type:'out', label: T('fin.mSupplier') + ' \u00B7 ' + (x.e.productName || ''), who: x.e.origin || '', amount: x.paid }); });
-    t.ox.forEach(e=> moves.push({ date: e.date, type:'out', label: (dispName('expenseCategories', e.category) || '') + (e.details ? ' \u00B7 ' + e.details : ''), who: dispName('paymentModes', e.method) || '', amount: Number(e.amount)||0 }));
-    moves.sort((a,b)=> String(b.date||'').localeCompare(String(a.date||'')));
-    const inTotal = moves.filter(m=> m.type==='in').reduce((s,m)=> s + m.amount, 0);
-    const outTotal = moves.filter(m=> m.type==='out').reduce((s,m)=> s + m.amount, 0);
-
-    const months = finMonths(6);
-    const inBars = months.map(k=> ({ name:k, value: Math.round(orders.filter(o=> finMonthKey(o.date)===k).map(finBill).reduce((s,b)=> s + b.cashIn, 0)), color:'#6B8F71' }));
-    const outBars = months.map(k=> {
-      const st = finStockIn().filter(x=> finMonthKey(x.e.date)===k).reduce((s,x)=> s + x.paid, 0);
-      const ox = opex.filter(e=> finMonthKey(e.date)===k).reduce((s,e)=> s + (Number(e.amount)||0), 0);
-      return { name:k, value: Math.round(st + ox), color:'#C6432E' };
-    });
-
-    body.innerHTML = `
-      <div class="panel">
-        ${finToolbar()}
-        <div class="art-sum-cards">
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('fin.cashIn'))}</div><div class="art-stat-value art-profit">${fmtD(inTotal)} ฿</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('fin.cashOut'))}</div><div class="art-stat-value art-pending-due">${fmtD(outTotal)} ฿</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('fin.cashNet'))}</div><div class="art-stat-value ${(inTotal-outTotal)<0?'art-pending-due':'art-profit'}">${fmtD(inTotal-outTotal)} ฿</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('fin.vsProfit'))}</div><div class="art-stat-value" style="font-size:16px;">${fmtD((inTotal-outTotal) - t.net)} ฿</div></div>
-        </div>
-
-        <div class="acct-summary" style="grid-template-columns:1fr 1fr;">
-          <div class="acct-summary-chart">
-            <h4 class="art-form-section" style="margin-top:0;">${esc(T('fin.inTrend'))}</h4>
-            ${acctBarsHtml(inBars)}
-          </div>
-          <div class="acct-summary-chart">
-            <h4 class="art-form-section" style="margin-top:0;">${esc(T('fin.outTrend'))}</h4>
-            ${acctBarsHtml(outBars)}
-            <p class="setting-desc" style="margin:8px 0 0;">${esc(T('fin.cashHint'))}</p>
-          </div>
-        </div>
-
-        <div class="art-table-wrap">
-          <table class="art-table">
-            <thead><tr><th>${esc(T('exp.date'))}</th><th>${esc(T('fin.movement'))}</th><th>${esc(T('fin.party'))}</th><th class="num">${esc(T('fin.in'))}</th><th class="num">${esc(T('fin.out'))}</th></tr></thead>
-            <tbody>${moves.length ? moves.map(m=> `
-              <tr>
-                <td>${esc(m.date||'-')}</td>
-                <td>${esc(m.label)}</td>
-                <td>${esc(m.who)}</td>
-                <td class="num art-profit">${m.type==='in' ? fmtD(m.amount) : '-'}</td>
-                <td class="num art-pending-due">${m.type==='out' ? fmtD(m.amount) : '-'}</td>
-              </tr>`).join('') : `<tr><td colspan="5" class="art-empty">${esc(T('fin.noMoves'))}</td></tr>`}
-            </tbody>
-            <tfoot><tr><td colspan="3">${esc(T('rev.totalRows'))} (${moves.length})</td><td class="num">${fmtD(inTotal)}</td><td class="num">${fmtD(outTotal)}</td></tr></tfoot>
-          </table>
-        </div>
-      </div>`;
-  }
-
-  /* ---- Customer Document ----
-   * A standing remark that is printed on EVERY document produced from Sell
-   * Management (receipt, billing note, tax invoice…). Kept on the config so it
-   * travels with the business profile.
-   */
-  function renderCustomerDoc(body){
-    const note = (config.docNote != null) ? config.docNote : '';
-    body.innerHTML = `
-      <div class="panel">
-        <h4 class="art-form-section" style="margin-top:0;">${esc(T('cd.noteTitle'))}</h4>
-        <p class="setting-desc" style="margin-top:-6px;">${esc(T('cd.noteHint'))}</p>
-        <textarea id="cdNote" rows="5" style="width:100%;" placeholder="${esc(T('cd.notePh'))}">${esc(note)}</textarea>
-        <div class="art-modal-actions" style="justify-content:flex-start;">
-          <button class="btn btn-primary" id="cdSave">${esc(T('save'))}</button>
-          <span class="ap-dirty" id="cdSaved" style="display:none;">${esc(T('cd.saved'))}</span>
-        </div>
-        <h4 class="art-form-section">${esc(T('cd.previewTitle'))}</h4>
-        <p class="setting-desc" style="margin-top:-6px;">${esc(T('cd.previewHint'))}</p>
-        <div class="cd-preview" id="cdPreview">${note ? esc(note).replace(/\n/g,'<br>') : `<span class="setting-desc">${esc(T('cd.previewEmpty'))}</span>`}</div>
-      </div>`;
-    const ta = body.querySelector('#cdNote');
-    ta.addEventListener('input', ()=>{
-      const pv = body.querySelector('#cdPreview');
-      pv.innerHTML = ta.value.trim() ? esc(ta.value).replace(/\n/g,'<br>') : `<span class="setting-desc">${esc(T('cd.previewEmpty'))}</span>`;
-    });
-    body.querySelector('#cdSave').addEventListener('click', async ()=>{
-      config.docNote = ta.value.trim();
-      await saveConfig();
-      const flag = body.querySelector('#cdSaved');
-      flag.style.display = '';
-      setTimeout(()=>{ flag.style.display = 'none'; }, 1800);
-    });
-  }
-
-  /* ---- Sales tax report ----
-   * Only bills TICKED as VAT belong in the report; the untaxed ones are one
-   * click away so nothing is invisible (and mis-ticks are easy to spot).
-   */
-  let finTaxMode = 'vat';   // 'vat' | 'novat'
-  function finTax(body){
-    const wantVat = finTaxMode === 'vat';
-    const rows = orders
-      .filter(o=> finInRange(o.date))
-      .filter(o=> wantVat ? !!o.vatable : !o.vatable)
-      .map(o=>{
-        const co = computeOrder(o);
-        const base = o.vatable
-          ? (co.vatBase != null ? co.vatBase : co.netBase)
-          : (co.netBase != null ? co.netBase : co.net);
-        return { o, co, base, vat: co.vat || 0 };
-      })
-      .sort((a,b)=> String(a.o.date||'').localeCompare(String(b.o.date||'')));   // filing order: oldest first
-    const totalBase = rows.reduce((s2,r)=> s2 + r.base, 0);
-    const totalVat = rows.reduce((s2,r)=> s2 + r.vat, 0);
-
-    // Month-by-month summary — the shape a filing form wants.
-    const byMonth = {};
-    rows.forEach(r=>{
-      const k = finMonthKey(r.o.date);
-      if(!byMonth[k]) byMonth[k] = { base:0, vat:0, n:0 };
-      byMonth[k].base += r.base; byMonth[k].vat += r.vat; byMonth[k].n++;
-    });
-    const biz = config.business || {};
-
-    body.innerHTML = `
-      <div class="panel">
-        ${finToolbar()}
-        <div class="art-toolbar" style="padding-top:0;">
-          <div class="del-seg" id="taxMode">
-            <button type="button" class="del-seg-btn ${wantVat?'active':''}" data-m="vat">${esc(T('tax.modeVat'))}</button>
-            <button type="button" class="del-seg-btn ${wantVat?'':'active'}" data-m="novat">${esc(T('tax.modeNoVat'))}</button>
-          </div>
-          <div class="art-spacer"></div>
-          <span class="inv-summary">${esc(T('tax.issuer'))}: <b>${esc(biz.name || '-')}</b>${biz.taxId?' \u00B7 '+esc(biz.taxId):''}${biz.branch?' \u00B7 '+esc(biz.branch):''}</span>
-        </div>
-
-        <div class="art-sum-cards">
-          <div class="art-stat-card"><div class="art-stat-label">${esc(wantVat ? T('tax.invoices') : T('tax.billsNoVat'))}</div><div class="art-stat-value">${rows.length}</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('tax.base'))}</div><div class="art-stat-value">${fmtD(totalBase)} ฿</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('tax.output'))}</div><div class="art-stat-value ${wantVat?'art-profit':''}">${fmtD(totalVat)} ฿</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('tax.grand'))}</div><div class="art-stat-value">${fmtD(totalBase + totalVat)} ฿</div></div>
-        </div>
-        <p class="setting-desc">${esc(wantVat ? T('tax.hint') : T('tax.hintNoVat'))}</p>
-
-        ${wantVat && Object.keys(byMonth).length ? `
-        <h4 class="art-form-section">${esc(T('tax.byMonth'))}</h4>
-        <div class="art-table-wrap">
-          <table class="art-table">
-            <thead><tr><th>${esc(T('fin.month'))}</th><th class="num">${esc(T('tax.invoices'))}</th><th class="num">${esc(T('tax.base'))}</th><th class="num">${esc(T('tax.output'))}</th><th class="num">${esc(T('tax.grand'))}</th></tr></thead>
-            <tbody>${Object.keys(byMonth).sort().map(k=> `
-              <tr><td>${esc(k)}</td><td class="num">${byMonth[k].n}</td><td class="num">${fmtD(byMonth[k].base)}</td><td class="num">${fmtD(byMonth[k].vat)}</td><td class="num">${fmtD(byMonth[k].base + byMonth[k].vat)}</td></tr>`).join('')}</tbody>
-          </table>
-        </div>` : ''}
-
-        <h4 class="art-form-section">${esc(wantVat ? T('tax.detail') : T('tax.detailNoVat'))}</h4>
-        <div class="art-table-wrap">
-          <table class="art-table">
-            <thead><tr>
-              <th class="num">#</th><th>${esc(T('exp.date'))}</th><th>${esc(T('rev.invoiceNo'))}</th>
-              <th>${esc(T('rev.customer'))}</th><th>${esc(T('rev.platform'))}</th>
-              <th class="num">${esc(T('tax.base'))}</th><th class="num">${esc(T('tax.output'))}</th><th class="num">${esc(T('tax.grand'))}</th>
-              <th>${esc(T('fin.note'))}</th><th></th>
-            </tr></thead>
-            <tbody>${rows.length ? rows.map((r,i)=> `
-              <tr data-id="${esc(r.o.id)}">
-                <td class="num">${i+1}</td>
-                <td>${esc(r.o.date||'-')}</td>
-                <td class="art-id">${esc(r.o.invoiceNumber||'-')}</td>
-                <td>${esc(r.o.customerName||'-')}</td>
-                <td>${esc(dispName('platforms', r.o.platform) || '-')}</td>
-                <td class="num">${fmtD(r.base)}</td>
-                <td class="num ${r.vat?'art-profit':''}">${fmtD(r.vat)}</td>
-                <td class="num" style="font-weight:700;">${fmtD(r.base + r.vat)}</td>
-                <td>${r.o.docSplit === 'split' ? `<span class="art-pill" style="background:#9B8B78">${esc(T('doc.splitShort'))}</span>` : ''}</td>
-                <td><button class="acc-icon tax-doc" title="${esc(T('doc.tx.title'))}">\u{1F4C4}</button></td>
-              </tr>`).join('') : `<tr><td colspan="10" class="art-empty">${esc(T('tax.empty'))}</td></tr>`}
-            </tbody>
-            <tfoot><tr><td colspan="5">${esc(T('rev.totalRows'))} (${rows.length})</td><td class="num">${fmtD(totalBase)}</td><td class="num">${fmtD(totalVat)}</td><td class="num">${fmtD(totalBase+totalVat)}</td><td colspan="2"></td></tr></tfoot>
-          </table>
-        </div>
-      </div>`;
-
-    body.querySelectorAll('#taxMode [data-m]').forEach(btn=> btn.addEventListener('click', ()=>{
-      finTaxMode = btn.dataset.m;
-      renderFinPage(body, 'tax');
-    }));
-    body.querySelectorAll('tr[data-id]').forEach(tr=>{
-      const o = orders.find(x=> x.id === tr.dataset.id);
-      const btn = tr.querySelector('.tax-doc');
-      if(o && btn) btn.addEventListener('click', ()=> openDocMaker(o, body, ()=> renderFinPage(body, 'tax')));
-    });
-  }
-
-  // ---- Operational Expense -------------------------------------------------
-  // A running list of day-to-day costs. Type a row, press Add, it is saved.
-  let opexFilter = { from:'', to:'', cat:'all' };
-  let opexEditing = null;   // id of the row currently open for editing
-  function opexCatColor(name){ return ((config.expenseCategories||[]).find(c=> c.name === name) || {}).color || '#8A8F80'; }
-  function renderOpExpense(body){
-    const f = opexFilter;
-    const cats = config.expenseCategories || [];
-    const rows = opex
-      .filter(e=> (!f.from || (e.date||'') >= f.from) && (!f.to || (e.date||'') <= f.to))
-      .filter(e=> f.cat === 'all' || e.category === f.cat)
-      .slice()
-      .sort((a,b)=> String(b.date||'').localeCompare(String(a.date||'')) || String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
-    const total = rows.reduce((sm,e)=> sm + (Number(e.amount)||0), 0);
-    const byCat = {};
-    rows.forEach(e=>{ const k = e.category || T('sum.uncategorised'); byCat[k] = (byCat[k]||0) + (Number(e.amount)||0); });
-    const donutItems = Object.keys(byCat).map(n=> ({ name: dispName('expenseCategories', n) || n, value: Math.round(byCat[n]), color: opexCatColor(n) })).sort((a,b)=> b.value - a.value);
-    const biggest = donutItems.length ? donutItems[0] : null;
-    const today = (window.localIso ? window.localIso() : new Date().toISOString().slice(0,10));
-
-    body.innerHTML = `
-      <div class="panel">
-        <div class="art-toolbar">
-          <div class="art-field"><label>${esc(T('exp.from'))}</label><input type="date" id="oxFrom" value="${esc(f.from)}"></div>
-          <div class="art-field"><label>${esc(T('exp.to'))}</label><input type="date" id="oxTo" value="${esc(f.to)}"></div>
-          <div class="art-field"><label>${esc(T('ox.category'))}</label>
-            <select id="oxCatFilter">
-              <option value="all">${esc(T('exp.all'))}</option>
-              ${cats.map(c=> `<option value="${esc(c.name)}" ${f.cat===c.name?'selected':''}>${esc(itemLabel(c))}</option>`).join('')}
-            </select>
-          </div>
-          <button class="btn btn-ghost" id="oxClear">${esc(T('exp.clearFilter'))}</button>
-        </div>
-
-        <div class="art-sum-cards">
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('ox.count'))}</div><div class="art-stat-value">${rows.length}</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('ox.total'))}</div><div class="art-stat-value art-pending-due">${fmtD(total)} \u0E3F</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('ox.avg'))}</div><div class="art-stat-value">${fmtD(rows.length ? total/rows.length : 0)} \u0E3F</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('ox.biggest'))}</div><div class="art-stat-value" style="font-size:16px;">${biggest ? esc(biggest.name) : '-'}</div></div>
-        </div>
-
-        <div class="acct-summary" style="grid-template-columns:minmax(260px,380px) 1fr;">
-          <div class="acct-summary-chart">
-            <h4 class="art-form-section" style="margin-top:0;">${esc(T('ox.byCat'))}</h4>
-            ${acctDonutHtml(donutItems, fmt(Math.round(total)), T('ox.short'))}
-          </div>
-          <div class="acct-summary-stats">
-            <h4 class="art-form-section" style="margin-top:0;">${esc(T('ox.addTitle'))}</h4>
-            <div class="ox-add">
-              <input type="date" id="oxNewDate" value="${esc(today)}">
-              <select id="oxNewCat">${cats.map(c=> `<option value="${esc(c.name)}">${esc(itemLabel(c))}</option>`).join('')}</select>
-              <input type="text" id="oxNewDesc" placeholder="${esc(T('ox.descPh'))}">
-              <select id="oxNewPay">${(config.paymentModes||[]).map(m=> `<option value="${esc(m.name)}">${esc(itemLabel(m))}</option>`).join('')}</select>
-              <input type="number" id="oxNewAmt" step="0.01" min="0" placeholder="0">
-              <button class="btn btn-primary" id="oxAdd">${esc(T('ox.add'))}</button>
-            </div>
-            <p class="setting-desc">${esc(T('ox.addHint'))}</p>
-          </div>
-        </div>
-
-        <div class="art-table-wrap">
-          <table class="art-table">
-            <thead><tr>
-              <th>${esc(T('exp.date'))}</th><th>${esc(T('ox.category'))}</th><th>${esc(T('ox.details'))}</th>
-              <th>${esc(T('pay.mode'))}</th><th class="num">${esc(T('ox.amount'))}</th>
-              <th>${esc(T('ox.receipt'))}</th><th>${esc(T('ox.updatedBy'))}</th><th></th>
-            </tr></thead>
-            <tbody>${rows.length ? rows.map(e=>{
-              const editing = opexEditing === e.id;
-              return `
-              <tr data-id="${esc(e.id)}" class="${editing?'ox-editing':''}">
-                <td>${editing
-                  ? `<input type="date" class="ox-inp ox-date" value="${esc(e.date||'')}">`
-                  : esc(e.date||'-')}</td>
-                <td>${editing
-                  ? `<select class="art-inline-sel ox-cat" style="background:${opexCatColor(e.category)};">${cats.map(c=> `<option value="${esc(c.name)}" ${e.category===c.name?'selected':''}>${esc(itemLabel(c))}</option>`).join('')}</select>`
-                  : `<span class="art-pill" style="background:${opexCatColor(e.category)}">${esc(dispName('expenseCategories', e.category) || '-')}</span>`}</td>
-                <td>${editing
-                  ? `<input type="text" class="ox-inp ox-desc" value="${esc(e.details||'')}" placeholder="${esc(T('ox.descPh'))}">`
-                  : esc(e.details || '-')}</td>
-                <td>${editing
-                  ? `<select class="art-inline-sel ox-pay">${(config.paymentModes||[]).map(m=> `<option value="${esc(m.name)}" ${e.method===m.name?'selected':''}>${esc(itemLabel(m))}</option>`).join('')}</select>`
-                  : esc(dispName('paymentModes', e.method) || '-')}</td>
-                <td class="num">${editing
-                  ? `<input type="number" class="se-inp ox-amt" value="${e.amount || ''}" step="0.01" min="0" placeholder="0">`
-                  : `<b>${fmtD(e.amount)}</b>`}</td>
-                <td><button class="acc-icon ox-proof ${(e.proofs&&e.proofs.length)?'has-proof':'is-empty'}" title="${esc(T('ox.receipt'))}">\u{1F4CE}${(e.proofs&&e.proofs.length)?' '+e.proofs.length:''}</button></td>
-                <td class="art-edited">${esc(e.updatedBy || e.by || '-')}${e.updatedAt ? '<div class="ap-by">'+esc(_fmtEditedAt(e.updatedAt))+'</div>' : ''}</td>
-                <td><div class="art-row-actions">
-                  ${editing
-                    ? `<button class="btn btn-primary btn-sm ox-save">${esc(T('save'))}</button><button class="acc-icon ox-cancel" title="${esc(T('cancel'))}">\u2715</button>`
-                    : `<button class="acc-icon ox-edit" title="${esc(T('edit'))}">\u270E</button><button class="acc-icon ox-del" title="${esc(T('delete'))}">\u2715</button>`}
-                </div></td>
-              </tr>`; }).join('') : `<tr><td colspan="8" class="art-empty">${esc(T('ox.empty'))}</td></tr>`}
-            </tbody>
-            <tfoot><tr><td colspan="4">${esc(T('rev.totalRows'))} (${rows.length})</td><td class="num">${fmtD(total)}</td><td colspan="3"></td></tr></tfoot>
-          </table>
-        </div>
-      </div>`;
-
-    const redraw = ()=> renderOpExpense(body);
-    body.querySelector('#oxFrom').addEventListener('change', ev=>{ f.from = ev.target.value; redraw(); });
-    body.querySelector('#oxTo').addEventListener('change', ev=>{ f.to = ev.target.value; redraw(); });
-    body.querySelector('#oxCatFilter').addEventListener('change', ev=>{ f.cat = ev.target.value; redraw(); });
-    body.querySelector('#oxClear').addEventListener('click', ()=>{ opexFilter = { from:'', to:'', cat:'all' }; redraw(); });
-
-    const addRow = async ()=>{
-      const amt = parseFloat(body.querySelector('#oxNewAmt').value) || 0;
-      const desc = body.querySelector('#oxNewDesc').value.trim();
-      if(amt <= 0){ alert(T('ox.errAmount')); return; }
-      const rec = {
-        id: rid(),
-        date: body.querySelector('#oxNewDate').value || today,
-        category: body.querySelector('#oxNewCat').value,
-        details: desc,
-        method: body.querySelector('#oxNewPay').value,
-        amount: amt,
-        proofs: [],
-        by: sellerNameOf(),
-        updatedBy: sellerNameOf(),
-        updatedAt: new Date().toISOString(),
-        createdAt: new Date().toISOString()
-      };
-      opex.push(rec);
-      await saveOpex();
-      logRec(opexLog, saveOpexLog, rec.id, opexLabel(rec), 'create', rec);
-      body.querySelector('#oxNewDesc').value = '';
-      body.querySelector('#oxNewAmt').value = '';
-      redraw();
-    };
-    body.querySelector('#oxAdd').addEventListener('click', addRow);
-    body.querySelector('#oxNewAmt').addEventListener('keydown', ev=>{ if(ev.key === 'Enter') addRow(); });
-    body.querySelector('#oxNewDesc').addEventListener('keydown', ev=>{ if(ev.key === 'Enter') addRow(); });
-
-    // A row is read-only until Edit is pressed; Save writes it and logs the change.
-    body.querySelectorAll('tr[data-id]').forEach(tr=>{
-      const e = opex.find(x=> x.id === tr.dataset.id);
-      if(!e) return;
-      const editBtn = tr.querySelector('.ox-edit');
-      if(editBtn) editBtn.addEventListener('click', ()=>{ opexEditing = e.id; redraw(); });
-      const cancelBtn = tr.querySelector('.ox-cancel');
-      if(cancelBtn) cancelBtn.addEventListener('click', ()=>{ opexEditing = null; redraw(); });
-      const saveBtn = tr.querySelector('.ox-save');
-      if(saveBtn) saveBtn.addEventListener('click', async ()=>{
-        const before = JSON.parse(JSON.stringify(e));
-        e.date = tr.querySelector('.ox-date').value || e.date;
-        e.category = tr.querySelector('.ox-cat').value;
-        e.details = tr.querySelector('.ox-desc').value.trim();
-        e.method = tr.querySelector('.ox-pay').value;
-        e.amount = parseFloat(tr.querySelector('.ox-amt').value) || 0;
-        e.updatedBy = sellerNameOf();
-        e.updatedAt = new Date().toISOString();
-        await saveOpex();
-        if(JSON.stringify(before) !== JSON.stringify(e)) logRec(opexLog, saveOpexLog, e.id, opexLabel(e), 'edit', e);
-        opexEditing = null;
-        redraw();
-      });
-      tr.querySelector('.ox-proof').addEventListener('click', ()=> openOpexProof(e, redraw));
-      const delBtn = tr.querySelector('.ox-del');
-      if(delBtn) delBtn.addEventListener('click', ()=>{
-        confirmModal(T('delete'), T('ox.delConfirm'), async ()=>{
-          logRec(opexLog, saveOpexLog, e.id, opexLabel(e), 'delete', e);
-          opex = opex.filter(x=> x.id !== e.id);
-          await saveOpex();
-          redraw();
-        });
-      });
-    });
-  }
-  function openOpexProof(entry, onDone){
-    let list = Array.isArray(entry.proofs) ? entry.proofs.slice(0,5) : [];
-    const ov = document.createElement('div');
-    ov.className = 'art-modal-overlay show';
-    ov.innerHTML = `<div class="art-modal" style="max-width:560px;">
-      <h3 class="art-modal-title">${esc(T('ox.receipt'))}</h3>
-      <p class="setting-desc" style="margin:-4px 0 12px;">${esc(T('pay.proofHint'))}</p>
-      <div class="pi-grid" id="oxGrid"></div>
-      <div class="art-modal-actions">
-        <button class="btn btn-ghost" id="oxPfCancel">${esc(T('cancel'))}</button>
-        <button class="btn btn-primary" id="oxPfOk">${esc(T('save'))}</button>
-      </div>
-    </div>`;
-    document.body.appendChild(ov);
-    const grid = ov.querySelector('#oxGrid');
-    function draw(){
-      grid.innerHTML = list.map((fl,i)=> `<span class="pi-thumb"><img src="${esc(fl.src)}" alt=""><button type="button" class="pi-rm" data-j="${i}">\u2715</button></span>`).join('')
-        + (list.length < 5 ? `<label class="pi-add"><input type="file" class="ox-inp-file" accept="image/*" multiple><span>+</span></label>` : '');
-      grid.querySelectorAll('.pi-rm').forEach(b=> b.addEventListener('click', ()=>{ list.splice(+b.dataset.j, 1); draw(); }));
-      const inp = grid.querySelector('.ox-inp-file');
-      if(inp) inp.addEventListener('change', (ev)=>{
-        Array.from(ev.target.files || []).forEach(file=>{
-          if(list.length >= 5) return;
-          if(file.size > 256*1024){ alert(T('bill.tooBig')); return; }
-          const rd = new FileReader();
-          rd.onload = ()=>{ if(list.length < 5){ list.push({ src: rd.result, name: file.name || '' }); draw(); } };
-          rd.readAsDataURL(file);
-        });
-      });
-      grid.querySelectorAll('.pi-thumb img').forEach((im,i)=> im.addEventListener('click', ()=> openProofs([list[i]], entry.details)));
-    }
-    draw();
-    const close = ()=> ov.remove();
-    ov.addEventListener('click', ev=>{ if(ev.target === ov) close(); });
-    ov.querySelector('#oxPfCancel').addEventListener('click', close);
-    ov.querySelector('#oxPfOk').addEventListener('click', async ()=>{
-      entry.proofs = list.slice(0,5);
-      entry.updatedBy = sellerNameOf();
-      entry.updatedAt = new Date().toISOString();
-      await saveOpex();
-      logRec(opexLog, saveOpexLog, entry.id, opexLabel(entry), 'edit', entry);
-      close();
-      if(typeof onDone === 'function') onDone();
-    });
-  }
-
-  // ---- Accounts Payable ----------------------------------------------------
-  // Every stock-in is money owed to a supplier. Edits here are held in a DRAFT
-  // and only written to the stock log when the user presses Save.
-  const AP_STATES = ['unpaid', 'partial', 'paid'];
-  const AP_COLORS = { unpaid:'#C6432E', partial:'#E0A100', paid:'#6B8F71' };
-  let apFilter = { from:'', to:'', status:'all', origin:'all', product:'all', cat:'all' };
-  let apDraft = {};          // { [stockLogId]: { status, proofs } }
-  const apAmountOf = (e)=> (Number(e.cost)||0) * (e.qty||0);
-  function apOf(e){
-    const d = apDraft[e.id];
-    if(d) return d;
-    const a = e.ap || {};
-    return {
-      status: a.status || 'unpaid',
-      proofs: Array.isArray(a.proofs) ? a.proofs : [],
-      paid: a.paid != null ? Number(a.paid) : (a.status === 'paid' ? apAmountOf(e) : 0),
-      statusBy: a.statusBy || '',
-      statusAt: a.statusAt || '',
-      verified: !!e.verified,
-      verifiedBy: e.verifiedBy || ''
-    };
-  }
-  function apTouch(e, patch){
-    apDraft[e.id] = Object.assign({}, apOf(e), patch);
-  }
-  function renderApPage(body){
-    const f = apFilter;
-    const rows = stockLog
-      .filter(e=> (e.qty||0) > 0)                       // stock coming IN
-      .filter(e=> (!f.from || (e.date||'') >= f.from) && (!f.to || (e.date||'') <= f.to))
-      .filter(e=> f.status === 'all' || apOf(e).status === f.status)
-      .filter(e=> f.origin === 'all' || (e.origin || '') === f.origin)
-      .filter(e=> f.product === 'all' || (e.productName || '') === f.product)
-      .filter(e=> f.cat === 'all' || (e.productType || '') === f.cat)
-      .slice()
-      .sort((a,b)=> String(b.createdAt||b.date||'').localeCompare(String(a.createdAt||a.date||'')));
-    const dirty = Object.keys(apDraft).length > 0;
-    const total = rows.reduce((sm,e)=> sm + apAmountOf(e), 0);
-    const paidSum = rows.reduce((sm,e)=> sm + Math.min(apOf(e).paid || 0, apAmountOf(e)), 0);
-    const owed = total - paidSum;
-    const canVerify = (typeof window.roleCanAccess !== 'function') || window.roleCanAccess(window.currentRole, 'verifyStock');
-    // Filter choices come from the entries themselves.
-    const allIn = stockLog.filter(e=> (e.qty||0) > 0);
-    const origins = [...new Set(allIn.map(e=> e.origin).filter(Boolean))].sort();
-    const productNames = [...new Set(allIn.map(e=> e.productName).filter(Boolean))].sort();
-
-    body.innerHTML = `
-      <div class="panel">
-        <div class="art-toolbar">
-          <div class="art-field"><label>${esc(T('exp.from'))}</label><input type="date" id="apFrom" value="${esc(f.from)}"></div>
-          <div class="art-field"><label>${esc(T('exp.to'))}</label><input type="date" id="apTo" value="${esc(f.to)}"></div>
-          <div class="art-field"><label>${esc(T('ap.status'))}</label>
-            <select id="apStatusFilter">
-              <option value="all" ${f.status==='all'?'selected':''}>${esc(T('exp.all'))}</option>
-              ${AP_STATES.map(st=> `<option value="${st}" ${f.status===st?'selected':''}>${esc(T('ap.'+st))}</option>`).join('')}
-            </select>
-          </div>
-          <div class="art-field"><label>${esc(T('sh.origin'))}</label>
-            <select id="apOrigin"><option value="all">${esc(T('exp.all'))}</option>${origins.map(o=> `<option value="${esc(o)}" ${f.origin===o?'selected':''}>${esc(o)}</option>`).join('')}</select>
-          </div>
-          <div class="art-field"><label>${esc(T('sh.product'))}</label>
-            <select id="apProduct"><option value="all">${esc(T('exp.all'))}</option>${productNames.map(o=> `<option value="${esc(o)}" ${f.product===o?'selected':''}>${esc(o)}</option>`).join('')}</select>
-          </div>
-          <div class="art-field"><label>${esc(T('prod.ptype'))}</label>
-            <select id="apCat"><option value="all">${esc(T('exp.all'))}</option>${(config.productTypes||[]).map(t=> `<option value="${esc(t.name)}" ${f.cat===t.name?'selected':''}>${esc(itemLabel(t))}</option>`).join('')}</select>
-          </div>
-          <button class="btn btn-ghost" id="apClear">${esc(T('exp.clearFilter'))}</button>
-          <div class="art-spacer"></div>
-          ${dirty ? `<span class="ap-dirty">${esc(T('ap.unsaved'))}</span>` : ''}
-          <button class="btn btn-ghost" id="apMass" ${rows.length?'':'disabled'}>${esc(T('ap.mass'))} (${rows.length})</button>
-          <button class="btn btn-primary" id="apSave" ${dirty?'':'disabled'}>${esc(T('save'))}</button>
-        </div>
-
-        <div class="art-sum-cards">
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('ap.entries'))}</div><div class="art-stat-value">${rows.length}</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('ap.total'))}</div><div class="art-stat-value">${fmtD(total)} \u0E3F</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('ap.owed'))}</div><div class="art-stat-value art-pending-due">${fmtD(owed)} \u0E3F</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('ap.settled'))}</div><div class="art-stat-value art-profit">${fmtD(total - owed)} \u0E3F</div></div>
-        </div>
-
-        <div class="art-table-wrap">
-          <table class="art-table">
-            <thead><tr>
-              <th>${esc(T('rst.date'))}</th><th>${esc(T('sh.product'))}</th><th>${esc(T('sh.ptype'))}</th>
-              <th class="num">${esc(T('sh.qtyAdded'))}</th><th>${esc(T('sh.origin'))}</th>
-              <th class="num">${esc(T('sh.cost'))}</th><th class="num">${esc(T('ap.amount'))}</th>
-              <th>${esc(T('sh.signature'))}</th><th>${esc(T('sh.bill'))}</th><th>${esc(T('sh.verified'))}</th>
-              <th>${esc(T('ap.proof'))}</th><th class="num">${esc(T('ap.paidAmount'))}</th><th>${esc(T('ap.status'))}</th>
-            </tr></thead>
-            <tbody>${rows.length ? rows.map(e=>{
-              const ap = apOf(e);
-              const amount = (Number(e.cost)||0) * (e.qty||0);
-              const changed = !!apDraft[e.id];
-              return `<tr data-id="${esc(e.id)}" class="${changed?'ap-changed':''}">
-                <td>${esc(e.date||'-')}</td>
-                <td>${esc(e.productName||'-')}</td>
-                <td>${esc(dispName('productTypes', e.productType) || '-')}</td>
-                <td class="num">${e.qty||0}</td>
-                <td><span class="art-pill" style="background:${originColor(e.origin)}">${esc(e.origin||'-')}</span></td>
-                <td class="num">${fmtD(e.cost)}</td>
-                <td class="num" style="font-weight:700;">${fmtD(amount)}</td>
-                <td>${esc(e.signature||'-')}</td>
-                <td>${e.bill ? `<button class="acc-icon ap-bill" title="${esc(T('sh.bill'))}">\u{1F4CE}</button>` : '-'}</td>
-                <td><span class="art-pill ap-verify ${canVerify?'ap-clickable':''}" style="background:${ap.verified?'#6B8F71':'#C6432E'}" title="${esc(T('ap.clickHint'))}">${esc(ap.verified?T('sh.verYes'):T('sh.verNo'))}</span>${(ap.verified && ap.verifiedBy) ? ` <span class="sh-verify-by">${esc(ap.verifiedBy)}</span>` : ''}</td>
-                <td><button class="acc-icon ap-proof ${ap.proofs.length?'has-proof':'is-empty'}" title="${esc(T('ap.proof'))}">\u{1F4CE}${ap.proofs.length?' '+ap.proofs.length:''}</button></td>
-                <td class="num">${ap.status === 'partial'
-                    ? `<input type="number" class="se-inp ap-paid" value="${ap.paid || ''}" step="0.01" min="0" max="${amount}" placeholder="0">`
-                    : (ap.status === 'paid' ? `<b>${fmtD(amount)}</b>` : '-')}</td>
-                <td><span class="art-pill ap-state" style="background:${AP_COLORS[ap.status]}" title="${esc(T('ap.clickHint'))}">${esc(T('ap.'+ap.status))}</span>${ap.statusBy ? `<div class="ap-by">${esc(ap.statusBy)}${ap.statusAt ? ' \u00B7 ' + esc(_fmtEditedAt(ap.statusAt)) : ''}</div>` : ''}</td>
-              </tr>`; }).join('') : `<tr><td colspan="13" class="art-empty">${esc(T('ap.empty'))}</td></tr>`}
-            </tbody>
-            <tfoot><tr><td colspan="6">${esc(T('sh.totalRows'))} (${rows.length})</td><td class="num">${fmtD(total)}</td><td colspan="4"></td><td class="num">${fmtD(paidSum)}</td><td></td></tr></tfoot>
-          </table>
-        </div>
-      </div>`;
-
-    const redraw = ()=> renderApPage(body);
-    body.querySelector('#apFrom').addEventListener('change', ev=>{ f.from = ev.target.value; redraw(); });
-    body.querySelector('#apTo').addEventListener('change', ev=>{ f.to = ev.target.value; redraw(); });
-    body.querySelector('#apStatusFilter').addEventListener('change', ev=>{ f.status = ev.target.value; redraw(); });
-    body.querySelector('#apOrigin').addEventListener('change', ev=>{ f.origin = ev.target.value; redraw(); });
-    body.querySelector('#apProduct').addEventListener('change', ev=>{ f.product = ev.target.value; redraw(); });
-    body.querySelector('#apCat').addEventListener('change', ev=>{ f.cat = ev.target.value; redraw(); });
-    body.querySelector('#apClear').addEventListener('click', ()=>{ apFilter = { from:'', to:'', status:'all', origin:'all', product:'all', cat:'all' }; redraw(); });
-
-    body.querySelectorAll('tr[data-id]').forEach(tr=>{
-      const e = stockLog.find(x=> x.id === tr.dataset.id);
-      if(!e) return;
-      const billBtn = tr.querySelector('.ap-bill');
-      if(billBtn) billBtn.addEventListener('click', ()=> openBill(e.bill));
-      // Click the pill to cycle Unpaid -> Partially paid -> Paid.
-      tr.querySelector('.ap-state').addEventListener('click', ()=>{
-        const cur = apOf(e).status;
-        const next = AP_STATES[(AP_STATES.indexOf(cur) + 1) % AP_STATES.length];
-        // Paid means the whole amount; unpaid means nothing has gone out yet.
-        const paid = next === 'paid' ? apAmountOf(e) : (next === 'unpaid' ? 0 : (apOf(e).paid || 0));
-        apTouch(e, { status: next, paid, statusBy: sellerNameOf(), statusAt: new Date().toISOString() });
-        redraw();
-      });
-      const paidInp = tr.querySelector('.ap-paid');
-      if(paidInp) paidInp.addEventListener('change', ()=>{
-        const v = Math.min(Math.max(parseFloat(paidInp.value) || 0, 0), apAmountOf(e));
-        apTouch(e, { paid: v });
-        redraw();
-      });
-      const verPill = tr.querySelector('.ap-verify');
-      if(verPill && canVerify) verPill.addEventListener('click', ()=>{
-        const cur = apOf(e);
-        apTouch(e, { verified: !cur.verified, verifiedBy: !cur.verified ? currentActorName() : '' });
-        redraw();
-      });
-      tr.querySelector('.ap-proof').addEventListener('click', ()=> openApProofEditor(e, redraw));
-    });
-
-    // Settle everything currently on screen (i.e. whatever the filters show).
-    const massBtn = body.querySelector('#apMass');
-    if(massBtn) massBtn.addEventListener('click', ()=> openApMass(rows, redraw));
-
-    const saveBtn = body.querySelector('#apSave');
-    if(saveBtn) saveBtn.addEventListener('click', ()=>{
-      if(!Object.keys(apDraft).length) return;
-      confirmModal(T('ap.confirmTitle'), T('ap.confirmBody').replace('{n}', Object.keys(apDraft).length), async ()=>{
-        Object.keys(apDraft).forEach(id=>{
-          const entry = stockLog.find(x=> x.id === id);
-          if(!entry) return;
-          const d = apDraft[id];
-          entry.ap = { status: d.status, proofs: d.proofs, paid: d.paid || 0, statusBy: d.statusBy || '', statusAt: d.statusAt || '' };
-          // Verified lives on the log entry itself, so Stock History shows the same thing.
-          entry.verified = !!d.verified;
-          entry.verifiedBy = d.verified ? (d.verifiedBy || currentActorName()) : '';
-        });
-        apDraft = {};
-        await saveStockLog();
-        redraw();
-      });
-    });
-  }
-  // Mark every filtered row as fully paid, optionally attaching the same payment
-  // proof to all of them. Like every edit here it lands in the draft first.
-  function openApMass(rows, onDone){
-    let list = [];
-    const totalAmt = rows.reduce((sm,e)=> sm + apAmountOf(e), 0);
-    const ov = document.createElement('div');
-    ov.className = 'art-modal-overlay show';
-    ov.innerHTML = `<div class="art-modal" style="max-width:560px;">
-      <h3 class="art-modal-title">${esc(T('ap.mass'))}</h3>
-      <p class="setting-desc">${esc(T('ap.massBody').replace('{n}', rows.length).replace('{amt}', fmt(totalAmt)))}</p>
-      <div class="art-img-label" style="margin:14px 0 6px;">${esc(T('ap.proof'))} <span class="pi-hint">${esc(T('ap.massProofHint'))}</span></div>
-      <div class="pi-grid" id="amGrid"></div>
-      <div class="art-modal-actions">
-        <button class="btn btn-ghost" id="amCancel">${esc(T('cancel'))}</button>
-        <button class="btn btn-primary" id="amOk">${esc(T('confirm'))}</button>
-      </div>
-    </div>`;
-    document.body.appendChild(ov);
-    const grid = ov.querySelector('#amGrid');
-    function draw(){
-      grid.innerHTML = list.map((fl,i)=> `<span class="pi-thumb"><img src="${esc(fl.src)}" alt=""><button type="button" class="pi-rm" data-j="${i}">\u2715</button></span>`).join('')
-        + (list.length < 5 ? `<label class="pi-add"><input type="file" class="am-inp" accept="image/*" multiple><span>+</span></label>` : '');
-      grid.querySelectorAll('.pi-rm').forEach(b=> b.addEventListener('click', ()=>{ list.splice(+b.dataset.j, 1); draw(); }));
-      const inp = grid.querySelector('.am-inp');
-      if(inp) inp.addEventListener('change', (ev)=>{
-        Array.from(ev.target.files || []).forEach(file=>{
-          if(list.length >= 5) return;
-          if(file.size > 256*1024){ alert(T('bill.tooBig')); return; }
-          const rd = new FileReader();
-          rd.onload = ()=>{ if(list.length < 5){ list.push({ src: rd.result, name: file.name || '' }); draw(); } };
-          rd.readAsDataURL(file);
-        });
-      });
-    }
-    draw();
-    const close = ()=> ov.remove();
-    ov.addEventListener('click', ev=>{ if(ev.target === ov) close(); });
-    ov.querySelector('#amCancel').addEventListener('click', close);
-    ov.querySelector('#amOk').addEventListener('click', ()=>{
-      const who = sellerNameOf(), when = new Date().toISOString();
-      rows.forEach(e=>{
-        const cur = apOf(e);
-        const proofs = list.length ? cur.proofs.concat(list).slice(0, 5) : cur.proofs;
-        apTouch(e, {
-          status: 'paid', paid: apAmountOf(e), proofs,
-          statusBy: who, statusAt: when,
-          verified: true, verifiedBy: cur.verifiedBy || who
-        });
-      });
-      close();
-      if(typeof onDone === 'function') onDone();
-    });
-  }
-  // Draft-only proof picker (max 5) — nothing is stored until the page is saved.
-  function openApProofEditor(entry, onDone){
-    let list = apOf(entry).proofs.slice(0, 5);
-    const ov = document.createElement('div');
-    ov.className = 'art-modal-overlay show';
-    ov.innerHTML = `<div class="art-modal" style="max-width:560px;">
-      <h3 class="art-modal-title">${esc(T('ap.proof'))} \u00B7 ${esc(entry.productName||'')}</h3>
-      <p class="setting-desc" style="margin:-4px 0 12px;">${esc(T('pay.proofHint'))}</p>
-      <div class="pi-grid" id="apGrid"></div>
-      <div class="art-modal-actions">
-        <button class="btn btn-ghost" id="apPfCancel">${esc(T('cancel'))}</button>
-        <button class="btn btn-primary" id="apPfOk">${esc(T('save'))}</button>
-      </div>
-    </div>`;
-    document.body.appendChild(ov);
-    const grid = ov.querySelector('#apGrid');
-    function draw(){
-      grid.innerHTML = list.map((fl,i)=> `<span class="pi-thumb"><img src="${esc(fl.src)}" alt=""><button type="button" class="pi-rm" data-j="${i}">\u2715</button></span>`).join('')
-        + (list.length < 5 ? `<label class="pi-add"><input type="file" class="ap-inp" accept="image/*" multiple><span>+</span></label>` : '');
-      grid.querySelectorAll('.pi-rm').forEach(b=> b.addEventListener('click', ()=>{ list.splice(+b.dataset.j, 1); draw(); }));
-      const inp = grid.querySelector('.ap-inp');
-      if(inp) inp.addEventListener('change', (ev)=>{
-        Array.from(ev.target.files || []).forEach(file=>{
-          if(list.length >= 5) return;
-          if(file.size > 256*1024){ alert(T('bill.tooBig')); return; }
-          const rd = new FileReader();
-          rd.onload = ()=>{ if(list.length < 5){ list.push({ src: rd.result, name: file.name || '' }); draw(); } };
-          rd.readAsDataURL(file);
-        });
-      });
-      grid.querySelectorAll('.pi-thumb img').forEach((im,i)=> im.addEventListener('click', ()=> openProofs([list[i]], entry.productName)));
-    }
-    draw();
-    const close = ()=> ov.remove();
-    ov.addEventListener('click', ev=>{ if(ev.target === ov) close(); });
-    ov.querySelector('#apPfCancel').addEventListener('click', close);
-    ov.querySelector('#apPfOk').addEventListener('click', ()=>{
-      apTouch(entry, { proofs: list.slice(0,5) });
-      close();
-      if(typeof onDone === 'function') onDone();
-    });
-  }
-  // Small yes/no dialog used before writing a page's pending changes.
-  function confirmModal(title, message, onYes){
-    const ov = document.createElement('div');
-    ov.className = 'art-modal-overlay show';
-    ov.innerHTML = `<div class="art-modal" style="max-width:420px;">
-      <h3 class="art-modal-title">${esc(title)}</h3>
-      <p class="setting-desc">${esc(message)}</p>
-      <div class="art-modal-actions">
-        <button class="btn btn-ghost" id="cfNo">${esc(T('cancel'))}</button>
-        <button class="btn btn-primary" id="cfYes">${esc(T('confirm'))}</button>
-      </div>
-    </div>`;
-    document.body.appendChild(ov);
-    const close = ()=> ov.remove();
-    ov.addEventListener('click', e=>{ if(e.target === ov) close(); });
-    ov.querySelector('#cfNo').addEventListener('click', close);
-    ov.querySelector('#cfYes').addEventListener('click', async ()=>{ close(); await onYes(); });
-  }
-
-  let sellExpFilter = { from:'', to:'' };
-  // Selling Expenses — starts as the full bill list; the costs of selling each
-  // one get layered on top once the user specs them.
-  function renderSellingExpenses(body){
-    const f = sellExpFilter;
-    const rows = orders
-      .filter(o=> (!f.from || (o.date||'') >= f.from) && (!f.to || (o.date||'') <= f.to))
-      .map(computeOrder)
-      .sort((a,b)=> String(b.date||'').localeCompare(String(a.date||'')));
-    const totalRev = rows.reduce((sm,o)=> sm + (o.netBase != null ? o.netBase : o.net), 0);
-    const totalDel = rows.reduce((sm,o)=> sm + sellExpOf(o).delivery, 0);
-    const totalOther = rows.reduce((sm,o)=> sm + sellExpOf(o).other, 0);
-    body.innerHTML = `
-      <div class="panel">
-        <div class="art-toolbar">
-          <div class="art-field"><label>${esc(T('exp.from'))}</label><input type="date" id="seFrom" value="${esc(f.from)}"></div>
-          <div class="art-field"><label>${esc(T('exp.to'))}</label><input type="date" id="seTo" value="${esc(f.to)}"></div>
-          <button class="btn btn-ghost" id="seClear">${esc(T('exp.clearFilter'))}</button>
-          <div class="art-spacer"></div>
-          <span class="inv-summary">${esc(T('cogs.bills'))}: <b>${rows.length}</b> \u00B7 ${esc(T('cogs.revenue'))}: <b>${fmtD(totalRev)}</b> \u0E3F</span>
-        </div>
-        <div class="art-table-wrap">
-          <table class="art-table">
-            <thead><tr>
-              <th>${esc(T('exp.date'))}</th><th>${esc(T('rev.invoiceNo'))}</th><th>${esc(T('rev.customer'))}</th>
-              <th>${esc(T('rev.platform'))}</th><th>${esc(T('rev.items'))}</th>
-              <th>${esc(T('rev.invoiceStatus'))}</th><th>${esc(T('sell.seller'))}</th>
-              <th class="num">${esc(T('exp.net'))}</th>
-              <th class="num">${esc(T('se.delivery'))}</th><th class="num">${esc(T('se.other'))}</th>
-              <th>${esc(T('exp.note'))}</th><th>${esc(T('se.status'))}</th>
-            </tr></thead>
-            <tbody>${rows.length ? rows.map(o=> `
-              <tr data-id="${esc(o.id)}">
-                <td>${esc(o.date||'-')}</td>
-                <td class="art-id">${esc(o.invoiceNumber||'-')}</td>
-                <td>${esc(o.customerName||'-')}</td>
-                <td>${esc(dispName('platforms', o.platform) || '-')}</td>
-                <td>${esc(itemsSummary(o.items))}</td>
-                <td><span class="art-pill" style="background:${ordColor('invoiceStatuses', o.invoiceStatus)}">${esc(dispName('invoiceStatuses', o.invoiceStatus))}</span></td>
-                <td>${esc(o.seller || o.createdBy || '-')}</td>
-                <td class="num" style="font-weight:700;">${fmtD(o.netBase != null ? o.netBase : o.net)}</td>
-                <td class="num"><input type="number" class="se-inp se-del" data-id="${esc(o.id)}" value="${sellExpOf(o).delivery || ''}" step="0.01" min="0" placeholder="0"></td>
-                <td class="num"><input type="number" class="se-inp se-oth" data-id="${esc(o.id)}" value="${sellExpOf(o).other || ''}" step="0.01" min="0" placeholder="0"></td>
-                <td><button type="button" class="acc-icon se-note ${sellExpOf(o).note?'has-note':''}" data-id="${esc(o.id)}" title="${esc(sellExpOf(o).note || T('se.addNote'))}">\u{1F4DD}</button></td>
-                <td>${(sellExpOf(o).delivery || sellExpOf(o).other)
-                    ? `<span class="art-pill" style="background:#6B8F71">${esc(T('se.added'))}</span>`
-                    : `<span class="art-pill" style="background:#C6432E">${esc(T('se.none'))}</span>`}</td>
-              </tr>`).join('') : `<tr><td colspan="12" class="art-empty">${esc(T('rev.empty'))}</td></tr>`}
-            </tbody>
-            <tfoot><tr><td colspan="7">${esc(T('rev.totalRows'))} (${rows.length})</td><td class="num">${fmtD(totalRev)}</td>
-              <td class="num">${fmtD(totalDel)}</td><td class="num">${fmtD(totalOther)}</td><td colspan="2"></td></tr></tfoot>
-          </table>
-        </div>
-      </div>`;
-    const redraw = ()=> renderSellingExpenses(body);
-    body.querySelector('#seFrom').addEventListener('change', e=>{ f.from = e.target.value; redraw(); });
-    body.querySelector('#seTo').addEventListener('change', e=>{ f.to = e.target.value; redraw(); });
-    body.querySelector('#seClear').addEventListener('click', ()=>{ sellExpFilter = { from:'', to:'' }; renderSellingExpenses(body); });
-    const writeExp = async (id, field, value)=>{
-      const o = orders.find(x=> x.id === id); if(!o) return;
-      o.sellExpense = Object.assign({ delivery:0, other:0, note:'' }, o.sellExpense || {});
-      o.sellExpense[field] = value;
-      await saveOrders();
-    };
-    body.querySelectorAll('.se-del').forEach(inp=> inp.addEventListener('change', async ()=>{
-      await writeExp(inp.dataset.id, 'delivery', parseFloat(inp.value) || 0);
-      redraw();   // the status pill and the totals follow
-    }));
-    body.querySelectorAll('.se-oth').forEach(inp=> inp.addEventListener('change', async ()=>{
-      await writeExp(inp.dataset.id, 'other', parseFloat(inp.value) || 0);
-      redraw();
-    }));
-    body.querySelectorAll('.se-note').forEach(btn=> btn.addEventListener('click', ()=>{
-      const o = orders.find(x=> x.id === btn.dataset.id); if(!o) return;
-      const ov = document.createElement('div');
-      ov.className = 'art-modal-overlay show';
-      ov.innerHTML = `<div class="art-modal" style="max-width:520px;">
-        <h3 class="art-modal-title">${esc(T('exp.note'))} \u00B7 ${esc(o.invoiceNumber||'')}</h3>
-        <textarea id="seNoteTxt" rows="5" style="width:100%;">${esc(sellExpOf(o).note)}</textarea>
-        <div class="art-modal-actions">
-          <button class="btn btn-ghost" id="seNoteCancel">${esc(T('cancel'))}</button>
-          <button class="btn btn-primary" id="seNoteSave">${esc(T('save'))}</button>
-        </div>
-      </div>`;
-      document.body.appendChild(ov);
-      const close = ()=> ov.remove();
-      ov.addEventListener('click', e=>{ if(e.target === ov) close(); });
-      ov.querySelector('#seNoteCancel').addEventListener('click', close);
-      ov.querySelector('#seNoteSave').addEventListener('click', async ()=>{
-        await writeExp(o.id, 'note', ov.querySelector('#seNoteTxt').value.trim());
-        close(); redraw();
-      });
-    }));
-  }
-
-  let stockValFilter = { cat:'all', hideEmpty:true };
-  // What is physically left, valued at what it actually cost.
-  // Walks the LOTS (not the product's stock field) so每 lot's own cost is used,
-  // and splits by colour the same way the Stock page does.
-  function stockValuationRows(){
-    const map = {};
-    lots.forEach(l=>{
-      const prod = products.find(x=> x.id === l.productId);
-      if(!prod) return;
-      const a = lotAlloc(l);
-      const rem = (l.qtyIn||0) - a.reserved - a.sold;
-      if(rem <= 0) return;
-      const key = l.productId + '|' + (l.colorId || '');
-      if(!map[key]){
-        const col = (l.colorId && Array.isArray(prod.colors)) ? prod.colors.find(c=> c.id === l.colorId) : null;
-        const price = (col && col.price != null && col.price !== '') ? Number(col.price) : (Number(prod.price) || 0);
-        map[key] = { prod, col, price, qty:0, cost:0, byOrigin:{} };
-      }
-      const val = rem * (Number(l.cost) || 0);
-      map[key].qty += rem;
-      map[key].cost += val;
-      const org = l.origin || T('sum.noOrigin');
-      map[key].byOrigin[org] = (map[key].byOrigin[org] || 0) + val;
-    });
-    return Object.keys(map).map(k=> map[k]);
-  }
-  function renderStockValuation(body){
-    const f = stockValFilter;
-    let rows = stockValuationRows();
-    if(f.cat !== 'all') rows = rows.filter(r=> (r.prod.productType || '') === f.cat);
-    rows.sort((a,b)=> b.cost - a.cost);
-
-    const totalQty   = rows.reduce((s,r)=> s + r.qty, 0);
-    const totalCost  = rows.reduce((s,r)=> s + r.cost, 0);
-    const totalRetail= rows.reduce((s,r)=> s + r.qty * r.price, 0);
-    const potential  = totalRetail - totalCost;
-    const margin     = totalRetail ? (potential / totalRetail * 100) : 0;
-    const skuCount   = new Set(rows.map(r=> r.prod.id)).size;
-
-    // Value split by category and by where the stock was bought.
-    const byCat = {}, byOrigin = {};
-    rows.forEach(r=>{
-      const cat = r.prod.productType || T('sum.uncategorised');
-      byCat[cat] = (byCat[cat] || 0) + r.cost;
-      Object.keys(r.byOrigin).forEach(o=>{ byOrigin[o] = (byOrigin[o] || 0) + r.byOrigin[o]; });
-    });
-    const catItems = Object.keys(byCat).map(n=> ({ name: dispName('productTypes', n) || n, value: Math.round(byCat[n]), color: ptypeColor(n) })).sort((a,b)=> b.value-a.value);
-    const orgItems = Object.keys(byOrigin).map(n=> ({ name: n, value: Math.round(byOrigin[n]), color: originColor(n) })).sort((a,b)=> b.value-a.value);
-    const topItems = rows.slice(0, 5).map(r=> ({
-      name: (r.prod.name || '-') + (r.col ? ' \u00B7 ' + (r.col.name || '') : ''),
-      value: Math.round(r.cost),
-      color: ptypeColor(r.prod.productType)
-    }));
-
-    body.innerHTML = `
-      <div class="panel">
-        <div class="art-toolbar">
-          <div class="art-field"><label>${esc(T('prod.ptype'))}</label>
-            <select id="svCat">
-              <option value="all">${esc(T('exp.all'))}</option>
-              ${(config.productTypes||[]).map(t=> `<option value="${esc(t.name)}" ${f.cat===t.name?'selected':''}>${esc(itemLabel(t))}</option>`).join('')}
-            </select>
-          </div>
-          <button class="btn btn-ghost" id="svClear">${esc(T('exp.clearFilter'))}</button>
-        </div>
-
-        <div class="art-sum-cards">
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('sv.skus'))}</div><div class="art-stat-value">${skuCount}</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('sv.units'))}</div><div class="art-stat-value">${totalQty}</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('sv.atCost'))}</div><div class="art-stat-value">${fmtD(totalCost)} \u0E3F</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('sv.atRetail'))}</div><div class="art-stat-value">${fmtD(totalRetail)} \u0E3F</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('sv.potential'))}</div><div class="art-stat-value art-profit">${fmtD(potential)} \u0E3F</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('sv.margin'))}</div><div class="art-stat-value">${totalRetail ? margin.toFixed(1)+'%' : '-'}</div></div>
-        </div>
-
-        <div class="acct-summary" style="grid-template-columns:1fr 1fr 1fr;">
-          <div class="acct-summary-chart">
-            <h4 class="art-form-section" style="margin-top:0;">${esc(T('sv.byCat'))}</h4>
-            ${acctDonutHtml(catItems, fmt(Math.round(totalCost)), T('cogs.short'))}
-          </div>
-          <div class="acct-summary-chart">
-            <h4 class="art-form-section" style="margin-top:0;">${esc(T('sv.byOrigin'))}</h4>
-            ${acctDonutHtml(orgItems, fmt(Math.round(totalCost)), T('cogs.short'))}
-          </div>
-          <div class="acct-summary-chart">
-            <h4 class="art-form-section" style="margin-top:0;">${esc(T('sv.top'))}</h4>
-            ${topItems.length ? acctBarsHtml(topItems) : `<p class="art-set-empty">${esc(T('sv.empty'))}</p>`}
-            <p class="setting-desc" style="margin:8px 0 0;">${esc(T('sv.topHint'))}</p>
-          </div>
-        </div>
-
-        <div class="art-table-wrap">
-          <table class="art-table">
-            <thead><tr>
-              <th>${esc(T('prod.sku'))}</th><th>${esc(T('prod.name'))}</th><th>${esc(T('prod.ptype'))}</th>
-              <th>${esc(T('pc.colorLabel'))}</th><th class="num">${esc(T('sv.onHand'))}</th>
-              <th class="num">${esc(T('sv.avgCost'))}</th><th class="num">${esc(T('sv.atCost'))}</th>
-              <th class="num">${esc(T('prod.price'))}</th><th class="num">${esc(T('sv.atRetail'))}</th>
-              <th class="num">${esc(T('sv.potential'))}</th>
-            </tr></thead>
-            <tbody>${rows.length ? rows.map(r=>{
-              const retail = r.qty * r.price;
-              return `<tr>
-                <td class="art-id">${esc(r.prod.sku||'-')}</td>
-                <td>${esc(r.prod.name||'-')}</td>
-                <td>${esc(dispName('productTypes', r.prod.productType) || '-')}</td>
-                <td>${r.col ? `<span class="pc-dot" style="background:${esc(r.col.hex||'#888')}"></span>${esc(r.col.name||'-')}` : '-'}</td>
-                <td class="num" style="font-weight:700;">${r.qty}</td>
-                <td class="num">${fmtD(r.qty ? r.cost / r.qty : 0)}</td>
-                <td class="num">${fmtD(r.cost)}</td>
-                <td class="num">${fmtD(r.price)}</td>
-                <td class="num">${fmtD(retail)}</td>
-                <td class="num ${(retail - r.cost) < 0 ? 'art-pending-due' : 'art-profit'}">${fmtD(retail - r.cost)}</td>
-              </tr>`; }).join('') : `<tr><td colspan="10" class="art-empty">${esc(T('sv.empty'))}</td></tr>`}
-            </tbody>
-            <tfoot><tr>
-              <td colspan="4">${esc(T('rev.totalRows'))} (${rows.length})</td>
-              <td class="num">${totalQty}</td><td></td>
-              <td class="num">${fmtD(totalCost)}</td><td></td>
-              <td class="num">${fmtD(totalRetail)}</td>
-              <td class="num art-profit">${fmtD(potential)}</td>
-            </tr></tfoot>
-          </table>
-        </div>
-      </div>`;
-    body.querySelector('#svCat').addEventListener('change', e=>{ stockValFilter.cat = e.target.value; renderStockValuation(body); });
-    body.querySelector('#svClear').addEventListener('click', ()=>{ stockValFilter = { cat:'all', hideEmpty:true }; renderStockValuation(body); });
-  }
-
-  let cogsFilter = { from:'', to:'', status:'all' };
-  // COGS Tracking — every bill (paid or not) priced at what the goods cost us.
-  function renderCogsPage(body){
-    const f = cogsFilter;
-    const rows = orders
-      .filter(o=> (!f.from || (o.date||'') >= f.from) && (!f.to || (o.date||'') <= f.to))
-      .filter(o=> f.status === 'all' || (f.status === 'paid' ? isPaidOrder(o) : !isPaidOrder(o)))
-      .map(o=>{
-        const co = computeOrder(o);
-        const cogs = orderCOGS(o);
-        const rev = (co.netBase != null ? co.netBase : co.net);
-        const pfee = orderPlatformFee(o);
-        const dfee = sellExpOf(o).delivery;   // both entered on Selling Expenses
-        const ofee = sellExpOf(o).other;
-        const comm = orderCommission(o);
-        return { o, co, cogs, rev, pfee, dfee, ofee, comm,
-                 gross: rev - cogs,
-                 net: rev - cogs - pfee - dfee - ofee - comm };
-      })
-      .sort((a,b)=> String(b.o.date||'').localeCompare(String(a.o.date||'')));
-
-    // Cost split by product category and by where the stock was bought.
-    const byCat = {}, byOrigin = {};
-    let missing = 0;
-    rows.forEach(r=>{
-      (r.o.items||[]).forEach(it=>{
-        const alloc = it.costAllocation || [];
-        if(!alloc.length && (it.qty||0) > 0) missing++;
-        const prod = products.find(x=> x.id === it.productId);
-        const cat = (prod && prod.productType) || T('sum.uncategorised');
-        alloc.forEach(a=>{
-          const val = (Number(a.cost)||0) * (a.qty||0);
-          if(val <= 0) return;
-          byCat[cat] = (byCat[cat]||0) + val;
-          const org = a.origin || T('sum.noOrigin');
-          byOrigin[org] = (byOrigin[org]||0) + val;
-        });
-      });
-    });
-    const catItems = Object.keys(byCat).map(n=> ({ name: dispName('productTypes', n) || n, value: Math.round(byCat[n]), color: ptypeColor(n) })).sort((a,b)=> b.value-a.value);
-    const orgItems = Object.keys(byOrigin).map(n=> ({ name: n, value: Math.round(byOrigin[n]), color: originColor(n) })).sort((a,b)=> b.value-a.value);
-
-    // Product ranking: gross profit per product (bill-level fees stay out of it,
-    // they belong to the bill, not to any one product).
-    const prodAgg = {};
-    rows.forEach(r=>{
-      (r.o.items || []).forEach(it=>{
-        const gross = (it.qty||0) * (it.price||0);
-        const net = gross - dAmt(gross, it.discount, it.discountType);
-        const cost = (it.costAllocation || []).reduce((x,a)=> x + (Number(a.cost)||0) * (a.qty||0), 0);
-        const prod = products.find(x=> x.id === it.productId);
-        const key = it.productId || it.productName || '-';
-        if(!prodAgg[key]) prodAgg[key] = { name: it.productName || (prod && prod.name) || '-', cat: (prod && prod.productType) || '', qty:0, rev:0, cost:0 };
-        prodAgg[key].qty += (it.qty||0);
-        prodAgg[key].rev += net;
-        prodAgg[key].cost += cost;
-      });
-    });
-    const topProducts = Object.keys(prodAgg).map(k=>{
-      const t = prodAgg[k];
-      return { ...t, profit: t.rev - t.cost };
-    }).sort((a,b)=> b.profit - a.profit).slice(0, 10);
-
-    const paidRows = rows.filter(r=> isPaidOrder(r.o));
-    const unpaidRows = rows.filter(r=> !isPaidOrder(r.o));
-    const sum = (list, key)=> list.reduce((s,r)=> s + (r[key] || 0), 0);
-    const totalCogs = sum(rows,'cogs'), totalRev = sum(rows,'rev');
-    const totalPfee = sum(rows,'pfee'), totalComm = sum(rows,'comm'), totalDfee = sum(rows,'dfee'), totalOfee = sum(rows,'ofee');
-    const totalGross = sum(rows,'gross'), totalNet = sum(rows,'net');
-    const margin = totalRev ? (totalNet / totalRev * 100) : 0;
-
-    body.innerHTML = `
-      <div class="panel">
-        <div class="art-toolbar">
-          <div class="art-field"><label>${esc(T('exp.from'))}</label><input type="date" id="cgFrom" value="${esc(f.from)}"></div>
-          <div class="art-field"><label>${esc(T('exp.to'))}</label><input type="date" id="cgTo" value="${esc(f.to)}"></div>
-          <div class="art-field"><label>${esc(T('rev.invoiceStatus'))}</label>
-            <select id="cgStatus">
-              <option value="all" ${f.status==='all'?'selected':''}>${esc(T('exp.all'))}</option>
-              <option value="paid" ${f.status==='paid'?'selected':''}>${esc(T('cogs.paid'))}</option>
-              <option value="unpaid" ${f.status==='unpaid'?'selected':''}>${esc(T('cogs.unpaid'))}</option>
-            </select>
-          </div>
-          <button class="btn btn-ghost" id="cgClear">${esc(T('exp.clearFilter'))}</button>
-        </div>
-
-        <div class="art-sum-cards">
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('cogs.bills'))}</div><div class="art-stat-value">${rows.length}</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('cogs.revenue'))}</div><div class="art-stat-value">${fmtD(totalRev)} \u0E3F</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('cogs.total'))}</div><div class="art-stat-value">${fmtD(totalCogs)} \u0E3F</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('cogs.profit'))}</div><div class="art-stat-value ${totalGross < 0 ? 'art-pending-due' : 'art-profit'}">${fmtD(totalGross)} \u0E3F</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('cogs.pfee'))}</div><div class="art-stat-value">${fmtD(totalPfee)} \u0E3F</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('cogs.commission'))}</div><div class="art-stat-value">${fmtD(totalComm)} \u0E3F</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('cogs.netProfit'))}</div><div class="art-stat-value ${totalNet < 0 ? 'art-pending-due' : 'art-profit'}">${fmtD(totalNet)} \u0E3F</div></div>
-          <div class="art-stat-card"><div class="art-stat-label">${esc(T('cogs.margin'))}</div><div class="art-stat-value">${totalRev ? margin.toFixed(1)+'%' : '-'}</div></div>
-        </div>
-        ${missing ? `<p class="setting-desc art-pending-due" style="margin:10px 0 0;">\u26A0 ${esc(T('cogs.missing').replace('{n}', missing))}</p>` : ''}
-
-        <div class="acct-summary" style="grid-template-columns:1fr 1fr 1fr;">
-          <div class="acct-summary-chart">
-            <h4 class="art-form-section" style="margin-top:0;">${esc(T('cogs.byCat'))}</h4>
-            ${acctDonutHtml(catItems, fmt(Math.round(totalCogs)), T('cogs.short'))}
-          </div>
-          <div class="acct-summary-chart">
-            <h4 class="art-form-section" style="margin-top:0;">${esc(T('cogs.byOrigin'))}</h4>
-            ${acctDonutHtml(orgItems, fmt(Math.round(totalCogs)), T('cogs.short'))}
-          </div>
-          <div class="acct-summary-chart">
-            <h4 class="art-form-section" style="margin-top:0;">${esc(T('cogs.byStatus'))}</h4>
-            ${acctBarsHtml([
-              { name: T('cogs.paid'),   value: Math.round(sum(paidRows,'cogs')),   color:'#6B8F71' },
-              { name: T('cogs.unpaid'), value: Math.round(sum(unpaidRows,'cogs')), color:'#C6432E' }
-            ])}
-            <p class="setting-desc" style="margin:8px 0 0;">${esc(T('cogs.barHint'))}</p>
-          </div>
-        </div>
-
-        <h4 class="art-form-section">${esc(T('cogs.top'))}</h4>
-        <p class="setting-desc" style="margin-top:-6px;">${esc(T('cogs.topHint'))}</p>
-        <div class="art-table-wrap">
-          <table class="art-table">
-            <thead><tr>
-              <th class="num">#</th><th>${esc(T('prod.name'))}</th><th>${esc(T('prod.ptype'))}</th>
-              <th class="num">${esc(T('cogs.sold'))}</th><th class="num">${esc(T('cogs.revenue'))}</th>
-              <th class="num">${esc(T('acct.cogs'))}</th><th class="num">${esc(T('sv.avgCost'))}</th>
-              <th class="num">${esc(T('cogs.profit'))}</th><th class="num">${esc(T('cogs.margin'))}</th>
-            </tr></thead>
-            <tbody>${topProducts.length ? topProducts.map((t,i)=> `
-              <tr>
-                <td class="num">${i+1}</td>
-                <td>${esc(t.name)}</td>
-                <td>${esc(dispName('productTypes', t.cat) || '-')}</td>
-                <td class="num">${t.qty}</td>
-                <td class="num">${fmtD(t.rev)}</td>
-                <td class="num">${fmtD(t.cost)}</td>
-                <td class="num">${fmtD(t.qty ? t.cost / t.qty : 0)}</td>
-                <td class="num ${t.profit < 0 ? 'art-pending-due' : 'art-profit'}">${fmtD(t.profit)}</td>
-                <td class="num">${t.rev ? (t.profit / t.rev * 100).toFixed(1)+'%' : '-'}</td>
-              </tr>`).join('') : `<tr><td colspan="9" class="art-empty">${esc(T('rev.empty'))}</td></tr>`}
-            </tbody>
-          </table>
-        </div>
-
-        <h4 class="art-form-section">${esc(T('cogs.perBill'))}</h4>
-        <div class="art-table-wrap">
-          <table class="art-table">
-            <thead><tr>
-              <th>${esc(T('exp.date'))}</th><th>${esc(T('rev.invoiceNo'))}</th><th>${esc(T('rev.customer'))}</th>
-              <th>${esc(T('rev.items'))}</th><th>${esc(T('rev.invoiceStatus'))}</th>
-              <th class="num">${esc(T('cogs.revenue'))}</th><th class="num">${esc(T('acct.cogs'))}</th>
-              <th class="num">${esc(T('cogs.pfee'))}</th><th class="num">${esc(T('cogs.dfee'))}</th>
-              <th class="num">${esc(T('se.other'))}</th><th class="num">${esc(T('cogs.commission'))}</th>
-              <th class="num">${esc(T('cogs.netProfit'))}</th><th class="num">${esc(T('cogs.margin'))}</th>
-            </tr></thead>
-            <tbody>${rows.length ? rows.map(r=>{
-              const rev = r.rev;
-              const mg = rev ? (r.net / rev * 100) : 0;
-              return `<tr>
-                <td>${esc(r.o.date||'-')}</td>
-                <td class="art-id">${esc(r.o.invoiceNumber||'-')}</td>
-                <td>${esc(r.o.customerName||'-')}</td>
-                <td>${esc(itemsSummary(r.o.items))}</td>
-                <td><span class="art-pill" style="background:${ordColor('invoiceStatuses', r.o.invoiceStatus)}">${esc(dispName('invoiceStatuses', r.o.invoiceStatus))}</span></td>
-                <td class="num">${fmtD(rev)}</td>
-                <td class="num">${fmtD(r.cogs)}</td>
-                <td class="num">${fmtD(r.pfee)}</td>
-                <td class="num">${fmtD(r.dfee)}</td>
-                <td class="num">${fmtD(r.ofee)}</td>
-                <td class="num">${fmtD(r.comm)}</td>
-                <td class="num ${r.net < 0 ? 'art-pending-due' : 'art-profit'}">${fmtD(r.net)}</td>
-                <td class="num">${rev ? mg.toFixed(1)+'%' : '-'}</td>
-              </tr>`; }).join('') : `<tr><td colspan="13" class="art-empty">${esc(T('rev.empty'))}</td></tr>`}
-            </tbody>
-            <tfoot><tr>
-              <td colspan="5">${esc(T('rev.totalRows'))} (${rows.length})</td>
-              <td class="num">${fmtD(totalRev)}</td><td class="num">${fmtD(totalCogs)}</td>
-              <td class="num">${fmtD(totalPfee)}</td><td class="num">${fmtD(totalDfee)}</td>
-              <td class="num">${fmtD(totalOfee)}</td><td class="num">${fmtD(totalComm)}</td>
-              <td class="num ${totalNet < 0 ? 'art-pending-due' : 'art-profit'}">${fmtD(totalNet)}</td>
-              <td class="num">${totalRev ? margin.toFixed(1)+'%' : '-'}</td>
-            </tr></tfoot>
-          </table>
-        </div>
-      </div>`;
-    const redraw = ()=> renderCogsPage(body);
-    body.querySelector('#cgFrom').addEventListener('change', e=>{ f.from = e.target.value; redraw(); });
-    body.querySelector('#cgTo').addEventListener('change', e=>{ f.to = e.target.value; redraw(); });
-    body.querySelector('#cgStatus').addEventListener('change', e=>{ f.status = e.target.value; redraw(); });
-    body.querySelector('#cgClear').addEventListener('click', ()=>{ cogsFilter = { from:'', to:'', status:'all' }; renderCogsPage(body); });
-  }
-  function renderBillsPage(body, kind){
-    const paidName = paidStatusName();
-    const wantPaid = kind === 'receipts';
-    const f = billFilters[kind];
-    const rows = orders
-      .filter(o=> paidName ? ((o.invoiceStatus === paidName) === wantPaid) : !wantPaid)
-      .filter(o=> (!f.from || (o.date||'') >= f.from) && (!f.to || (o.date||'') <= f.to))
-      .filter(o=>{
-        if(f.vat === 'all') return true;
-        if(f.vat === 'none') return !o.vatable;
-        if(f.vat === 'split') return !!o.vatable && o.docSplit === 'split';
-        if(f.vat === 'combined') return !!o.vatable && o.docSplit !== 'split';
-        return true;
-      })
-      .map(computeOrder)
-      .sort((a,b)=> String(b.date||'').localeCompare(String(a.date||'')));
-    const canV = isAdminActor();
-    const totalNet = rows.reduce((sm,o)=> sm + o.net, 0);
-    const totalDue = rows.reduce((sm,o)=> sm + pendingOf(o), 0);
-    const totalPaid = rows.reduce((sm,o)=> sm + (o.paidAmount||0), 0);
-
-    // Invoicing slices by invoice status; Receipts slices by how the money came in.
-    const counts = {};
-    const groupKey = wantPaid ? 'paymentModes' : 'invoiceStatuses';
-    rows.forEach(o=>{ const k = (wantPaid ? o.paymentMode : o.invoiceStatus) || '-'; counts[k] = (counts[k]||0) + 1; });
-    const donutItems = Object.keys(counts).map(name=> ({
-      name: dispName(groupKey, name) || name,
-      value: counts[name],
-      color: ordColor(groupKey, name)
-    })).sort((a,b)=> b.value - a.value);
-
-    // Receipts are settled, so "deposits received" says nothing there — show the
-    // average value per receipt instead.
-    const avgPer = rows.length ? totalNet / rows.length : 0;
-    const cards = wantPaid
-      ? `<div class="art-stat-card"><div class="art-stat-label">${esc(T('rc.count'))}</div><div class="art-stat-value">${rows.length}</div></div>
-         <div class="art-stat-card"><div class="art-stat-label">${esc(T('rc.total'))}</div><div class="art-stat-value">${fmtD(totalNet)} \u0E3F</div></div>
-         <div class="art-stat-card"><div class="art-stat-label">${esc(T('rc.avg'))}</div><div class="art-stat-value">${fmtD(avgPer)} \u0E3F</div></div>`
-      : `<div class="art-stat-card"><div class="art-stat-label">${esc(T('inv.unpaid'))}</div><div class="art-stat-value">${rows.length}</div></div>
-         <div class="art-stat-card"><div class="art-stat-label">${esc(T('pay.pending'))}</div><div class="art-stat-value art-pending-due">${fmtD(totalDue)} \u0E3F</div></div>
-         <div class="art-stat-card"><div class="art-stat-label">${esc(T('inv.billed'))}</div><div class="art-stat-value">${fmtD(totalNet)} \u0E3F</div></div>
-         <div class="art-stat-card"><div class="art-stat-label">${esc(T('inv.deposit'))}</div><div class="art-stat-value">${fmtD(totalPaid)} \u0E3F</div></div>`;
-
-    body.innerHTML = `
-      <div class="panel">
-        <div class="art-toolbar">
-          <div class="art-field"><label>${esc(T('exp.from'))}</label><input type="date" id="billFrom" value="${esc(f.from)}"></div>
-          <div class="art-field"><label>${esc(T('exp.to'))}</label><input type="date" id="billTo" value="${esc(f.to)}"></div>
-          <div class="art-field"><label>${esc(T('pay.vat'))}</label>
-            <select id="billVat">
-              <option value="all" ${f.vat==='all'?'selected':''}>${esc(T('exp.all'))}</option>
-              <option value="combined" ${f.vat==='combined'?'selected':''}>${esc(T('pay.vatYes'))}</option>
-              <option value="split" ${f.vat==='split'?'selected':''}>${esc(T('pay.vatSeparated'))}</option>
-              <option value="none" ${f.vat==='none'?'selected':''}>${esc(T('pay.vatNo'))}</option>
-            </select>
-          </div>
-          <button class="btn btn-ghost" id="billClear">${esc(T('exp.clearFilter'))}</button>
-        </div>
-        <div class="acct-summary">
-          <div class="acct-summary-chart">
-            <h4 class="art-form-section" style="margin-top:0;">${esc(wantPaid ? T('rc.byMode') : T('inv.byStatus'))}</h4>
-            ${acctDonutHtml(donutItems, String(rows.length), wantPaid ? T('rc.receipts') : T('inv.bills'))}
-          </div>
-          <div class="acct-summary-stats"><div class="art-sum-cards">${cards}</div></div>
-        </div>
-        <div class="art-table-wrap">
-          <table class="art-table led-table">
-            <thead><tr>
-              <th>${esc(T('exp.date'))}</th><th>${esc(T('rev.invoiceNo'))}</th><th>${esc(T('rev.customer'))}</th>
-              <th>${esc(T('rev.platform'))}</th><th>${esc(T('rev.items'))}</th><th class="num">${esc(T('exp.discount'))}</th>
-              <th class="num">${esc(T('exp.net'))}</th><th>${esc(T('exp.tag'))}</th>
-              <th>${esc(T('rev.orderStatus'))}</th><th>${esc(T('rev.invoiceStatus'))}</th><th>${esc(T('pay.mode'))}</th>
-              <th class="num">${esc(T('pay.paid'))}</th><th class="num">${esc(T('pay.pending'))}</th>
-              <th>${esc(T('rev.deliveryMethod'))}</th><th>${esc(T('rev.responsible'))}</th><th>${esc(T('col.lastEdited'))}</th>
-              <th class="led-sticky-seller">${esc(T('sell.seller'))}</th><th class="c led-sticky-vat">${esc(T('pay.vat'))}</th><th class="led-sticky-ver">${esc(T('del.verified'))}</th><th class="art-sticky-actions"></th>
-            </tr></thead>
-            <tbody>${rows.length ? rows.map(o=> `
-              <tr data-id="${esc(o.id)}">
-                <td>${esc(o.date||'-')}</td>
-                <td class="art-id">${esc(o.invoiceNumber||'-')}</td>
-                <td>${esc(o.customerName||'-')}</td>
-                <td>${esc(dispName('platforms', o.platform) || '-')}</td>
-                <td>${esc(itemsSummary(o.items))}</td>
-                <td class="num">${fmtD(o.itemDiscTotal + o.overallAmt)}</td>
-                <td class="num" style="font-weight:700;">${fmt(o.net)}</td>
-                <td><span class="art-pill" style="background:${ordColor('revenueTags', o.tag)}">${esc(dispName('revenueTags', o.tag))}</span></td>
-                <td><span class="art-pill" style="background:${ordColor('orderStatuses', o.orderStatus)}">${esc(dispName('orderStatuses', o.orderStatus))}</span></td>
-                <td><span class="art-pill" style="background:${ordColor('invoiceStatuses', o.invoiceStatus)}">${esc(dispName('invoiceStatuses', o.invoiceStatus))}</span></td>
-                <td>${esc(dispName('paymentModes', o.paymentMode) || '-')}</td>
-                <td class="num">${fmtD(o.paidAmount)}</td>
-                <td class="num ${pendingOf(o) > 0 ? 'art-pending-due' : ''}">${fmtD(pendingOf(o))}</td>
-                <td>${esc(o.deliveryMethod||'-')}</td>
-                <td>${esc(o.deliveryResponsible||'-')}</td>
-                <td class="art-edited">${esc(editedLabel(o))}</td>
-                <td class="led-sticky-seller">${esc(o.seller || o.createdBy || '-')}</td>
-                <td class="c led-sticky-vat">${vatPill(o)}</td>
-                <td class="led-sticky-ver">${ledgerVerifyPill(o, canV)}</td>
-                <td class="art-sticky-actions"><div class="art-row-actions">
-                  <button class="acc-icon inv-doc" title="${esc(T('doc.rv.title'))}">\u{1F4C4}</button>
-                  <button class="acc-icon inv-proof ${(o.paymentProofs && o.paymentProofs.length) ? 'has-proof' : 'is-empty'}" title="${esc(T('pay.proof'))}">\u{1F4CE}</button>
-                </div></td>
-              </tr>`).join('') : `<tr><td colspan="20" class="art-empty">${esc(wantPaid ? T('rc.empty') : T('inv.empty'))}</td></tr>`}
-            </tbody>
-          </table>
-        </div>
-      </div>`;
-    syncStickyCols(body.querySelector('table.art-table'));
-    const redraw = ()=> renderBillsPage(body, kind);
-    body.querySelector('#billFrom').addEventListener('change', e=>{ f.from = e.target.value; redraw(); });
-    body.querySelector('#billTo').addEventListener('change', e=>{ f.to = e.target.value; redraw(); });
-    body.querySelector('#billVat').addEventListener('change', e=>{ f.vat = e.target.value; redraw(); });
-    body.querySelector('#billClear').addEventListener('click', ()=>{ f.from = ''; f.to = ''; f.vat = 'all'; redraw(); });
-    body.querySelectorAll('tr[data-id]').forEach(tr=>{
-      const id = tr.dataset.id;
-      const doc = tr.querySelector('.inv-doc');
-      if(doc) doc.addEventListener('click', ()=> openDocMaker(orders.find(o=> o.id === id), body, redraw));
-      const pf = tr.querySelector('.inv-proof');
-      if(pf) pf.addEventListener('click', ()=>{
-        const o = orders.find(x=> x.id === id);
-        if(!o) return;
-        if(o.paymentProofs && o.paymentProofs.length) openProofs(o.paymentProofs, o.invoiceNumber);
-        else alert(T('pay.noProof'));
-      });
-      const vp = tr.querySelector('.led-verify-btn');
-      if(vp) vp.addEventListener('click', async ()=>{
-        const o = orders.find(x=> x.id === id); if(!o) return;
-        o.verified = !o.verified; o.verifiedBy = o.verified ? currentActorName() : '';
-        await saveOrders(); redraw();
-      });
-    });
-  }
-  // VAT at a glance: green when charged (saying whether the bill is split),
-  // red when it isn't.
-  function vatPill(o){
-    if(!o.vatable) return `<span class="art-pill" style="background:#C6432E">${esc(T('pay.vatNo'))}</span>`;
-    const sep = o.docSplit === 'split';
-    return `<span class="art-pill" style="background:#6B8F71">${esc(sep ? T('pay.vatSeparated') : T('pay.vatYes'))}</span>`;
-  }
-  function ledgerVerifyPill(o, can){
+  function ledgerVerifyPill(o){
     const on = !!o.verified;
+    const can = (typeof window.roleCanAccess !== 'function') || window.roleCanAccess(window.currentRole, 'verifyLedger');
     return `<span class="art-pill led-verify ${can?'led-verify-btn':''}" style="background:${on?'#6B8F71':'#C6432E'};">${esc(on?T('sh.verYes'):T('sh.verNo'))}</span>${(on && o.verifiedBy) ? ` <span class="sh-verify-by">${esc(o.verifiedBy)}</span>` : ''}`;
   }
   function renderOrdersTable(body){
@@ -3048,30 +1829,30 @@
           <td>${dateLabel}</td>
           <td class="art-id">${esc(o.invoiceNumber||'-')}</td>
           <td>${esc(o.customerName||'-')}</td>
-          <td>${esc(dispName('platforms', o.platform) || '-')}</td>
+          <td>${esc(o.platform||'-')}</td>
           <td>${esc(itemsSummary(o.items))}</td>
-          <td class="num">${fmtD((o.itemDiscTotal||0) + (o.overallAmt||0))}</td>
+          <td class="num">${fmt(o.discount)}</td>
           <td class="num" style="font-weight:700;">${fmt(o.net)}</td>
-          <td><select class="art-inline-sel" data-field="tag" style="background:${tagC}">${rTags.map(t=>`<option value="${esc(t.name)}" ${t.name===o.tag?'selected':''}>${esc(itemLabel(t))}</option>`).join('')}</select></td>
-          <td><select class="art-inline-sel" data-field="orderStatus" style="background:${osC}">${oStatuses.map(s=>`<option value="${esc(s.name)}" ${s.name===o.orderStatus?'selected':''}>${esc(itemLabel(s))}</option>`).join('')}</select></td>
-          <td><select class="art-inline-sel" data-field="invoiceStatus" style="background:${isC}">${iStatuses.map(s=>`<option value="${esc(s.name)}" ${s.name===o.invoiceStatus?'selected':''}>${esc(itemLabel(s))}</option>`).join('')}</select></td>
-          <td>${esc(dispName('paymentModes', o.paymentMode) || '-')}</td>
-          <td class="num">${fmtD(o.paidAmount)}</td>
-          <td class="num ${pendingOf(o) > 0 ? 'art-pending-due' : ''}">${fmtD(pendingOf(o))}</td>
+          <td>${_ledgerMode
+            ? `<span class="art-pill" style="background:${tagC}">${esc(dispName('revenueTags', o.tag))}</span>`
+            : `<select class="art-inline-sel" data-field="tag" style="background:${tagC}">${rTags.map(t=>`<option value="${esc(t.name)}" ${t.name===o.tag?'selected':''}>${esc(itemLabel(t))}</option>`).join('')}</select>`}</td>
+          <td>${_ledgerMode
+            ? `<span class="art-pill" style="background:${osC}">${esc(dispName('orderStatuses', o.orderStatus))}</span>`
+            : `<select class="art-inline-sel" data-field="orderStatus" style="background:${osC}">${oStatuses.map(s=>`<option value="${esc(s.name)}" ${s.name===o.orderStatus?'selected':''}>${esc(itemLabel(s))}</option>`).join('')}</select>`}</td>
+          <td>${_ledgerMode
+            ? `<span class="art-pill" style="background:${isC}">${esc(dispName('invoiceStatuses', o.invoiceStatus))}</span>`
+            : `<select class="art-inline-sel" data-field="invoiceStatus" style="background:${isC}">${iStatuses.map(s=>`<option value="${esc(s.name)}" ${s.name===o.invoiceStatus?'selected':''}>${esc(itemLabel(s))}</option>`).join('')}</select>`}</td>
           <td>${esc(o.deliveryMethod||'-')}</td>
           <td>${esc(o.deliveryResponsible||'-')}</td>
-          <td>${esc(o.seller || o.createdBy || '-')}</td>
           <td class="art-edited">${esc(editedLabel(o))}</td>
-          <td class="c sell-sticky-vat">${vatPill(o)}</td>
+          ${_ledgerMode ? `<td class="num">${fmt(orderCOGS(o))}</td><td class="num art-profit ${orderProfit(o) < 0 ? 'art-neg' : ''}">${fmt(orderProfit(o))}</td><td class="c led-sticky-vat"><input type="checkbox" class="led-vat-chk" ${o.vatable?'checked':''}></td><td class="led-sticky-ver">${ledgerVerifyPill(o)}</td>` : ''}
           <td class="art-sticky-actions"><div class="art-row-actions">
             <button class="acc-icon art-ord-doc" title="${esc(T('doc.rv.title'))}">📄</button>
-            <button class="acc-icon art-ord-proof ${(o.paymentProofs && o.paymentProofs.length) ? 'has-proof' : ''}" title="${esc(T('pay.proof'))}">\u{1F4CE}</button>
-            <button class="acc-icon art-ord-edit" title="${esc(T('edit'))}">✎</button>
-            <button class="acc-icon art-ord-del" title="${esc(T('delete'))}">✕</button>
+            ${_ledgerMode ? '' : `<button class="acc-icon art-ord-edit" title="${esc(T('edit'))}">✎</button>
+            <button class="acc-icon art-ord-del" title="${esc(T('delete'))}">✕</button>`}
           </div></td>
         </tr>`;
       }).join('');
-      syncStickyCols(tbody.closest('table'));
       tbody.querySelectorAll('tr').forEach(tr=>{
         const id = tr.dataset.id;
         tr.querySelectorAll('.art-inline-sel').forEach(sel=>{
@@ -3082,11 +1863,23 @@
             renderOrdersTable(body);
           });
         });
-        tr.querySelector('.art-ord-doc').addEventListener('click', ()=> openDocMaker(orders.find(o=>o.id===id), body, ()=> renderOrdersTable(body)));
-        const _pf = tr.querySelector('.art-ord-proof');
-        if(_pf) _pf.addEventListener('click', ()=>{ const o = orders.find(x=> x.id===id); if(o) openProofEditor(o, ()=> renderOrdersTable(body)); });
-        tr.querySelector('.art-ord-edit').addEventListener('click', ()=> openOrderModal(orders.find(o=>o.id===id), body, ()=> renderRevenuePage(body)));
-        tr.querySelector('.art-ord-del').addEventListener('click', async ()=>{
+        tr.querySelector('.art-ord-doc').addEventListener('click', ()=> openDocMaker(orders.find(o=>o.id===id), body));
+        const _vc = tr.querySelector('.led-vat-chk');
+        if(_vc) _vc.addEventListener('change', async ()=>{
+          const o = orders.find(x=> x.id === id); if(!o) return;
+          o.vatable = _vc.checked;
+          await saveOrders(); renderOrdersTable(body);
+        });
+        const _vp = tr.querySelector('.led-verify-btn');
+        if(_vp) _vp.addEventListener('click', async ()=>{
+          const o = orders.find(x=> x.id === id); if(!o) return;
+          o.verified = !o.verified; o.verifiedBy = o.verified ? currentActorName() : '';
+          await saveOrders(); renderOrdersTable(body);
+        });
+        const _edb = tr.querySelector('.art-ord-edit');
+        if(_edb) _edb.addEventListener('click', ()=> openOrderModal(orders.find(o=>o.id===id), body, ()=> renderRevenuePage(body)));
+        const _delb = tr.querySelector('.art-ord-del');
+        if(_delb) _delb.addEventListener('click', async ()=>{
           if(!window.confirm(T('rev.delConfirm'))) return;
           const _od = orders.find(o=> o.id === id);
           if(_od){ logRec(orderLog, saveOrderLog, id, _od.invoiceNumber, 'delete', _od); deletedOrders.push(toBin(_od)); await saveDeletedOrders(); }
@@ -3149,15 +1942,11 @@
   const DOCDEF = {
     rv:      { title:'doc.rv.title', prefix:'RV-', party:'doc.receivedFrom', signL:'doc.payer',        signR:'doc.payee',  showPay:true,  statement:'doc.st.received' },
     bn:      { title:'doc.bn.title', prefix:'BN-', party:'doc.billTo',       signL:'doc.billReceiver', signR:'doc.biller', showPay:false, statement:'doc.st.pleasePay' },
-    receipt: { title:'doc.rc.title', prefix:'RE-', party:'doc.receivedFrom', signL:'doc.payer',        signR:'doc.payee',  showPay:true,  statement:'doc.st.received' },
-    tax:     { title:'doc.tx.title', prefix:'TX-', party:'doc.billTo',       signL:'doc.payer',        signR:'doc.payee',  showPay:true,  statement:'doc.st.received', taxInvoice:true },
-    deposit: { title:'doc.dp.title', prefix:'DP-', party:'doc.receivedFrom', signL:'doc.payer',        signR:'doc.payee',  showPay:true,  statement:'doc.st.deposit',  deposit:true }
+    receipt: { title:'doc.rc.title', prefix:'RE-', party:'doc.receivedFrom', signL:'doc.payer',        signR:'doc.payee',  showPay:true,  statement:'doc.st.received' }
   };
 
   // Options step: pick document type + VAT + payment method, then generate.
-  function openDocMaker(order, body, onDone){
-    // A deposit receipt only makes sense while money is still outstanding.
-    const _dpPending = pendingOf(computeOrder(order));
+  function openDocMaker(order, body){
     const b = config.business || {};
     let type = 'rv';
     const ov = document.createElement('div');
@@ -3171,26 +1960,10 @@
           <button type="button" class="doc-type-btn active" data-dtype="rv">${esc(T('doc.rv.title'))}</button>
           <button type="button" class="doc-type-btn" data-dtype="bn">${esc(T('doc.bn.title'))}</button>
           <button type="button" class="doc-type-btn" data-dtype="receipt">${esc(T('doc.rc.title'))}</button>
-          <button type="button" class="doc-type-btn" data-dtype="tax">${esc(T('doc.tx.title'))}</button>
-          <button type="button" class="doc-type-btn" data-dtype="deposit" ${_dpPending > 0 ? '' : 'disabled'} title="${esc(_dpPending > 0 ? T('doc.dp.title') : T('doc.dp.disabled'))}">${esc(T('doc.dp.title'))}</button>
         </div>
-        <label class="doc-check" style="display:flex; gap:9px; padding:10px 0;"><input type="checkbox" id="dvVatChk" ${order&&order.vatable?'checked':''}> <span>${esc(T('doc.vatCalc'))}</span></label>
-        <div id="dvTaxFields" style="display:none;">
-          <h4 class="art-form-section" style="margin-top:14px;">${esc(T('doc.taxCustomer'))}</h4>
-          <p class="setting-desc" style="margin-top:-6px;">${esc(T('doc.taxCustomerHint'))}</p>
-          <div class="art-form-grid">
-            <label class="art-form-full">${esc(T('doc.custCompany'))}<input type="text" id="dvTaxName" value="${esc((order.taxCustomer&&order.taxCustomer.name)||order.customerName||'')}"></label>
-            <label class="art-form-full">${esc(T('doc.custAddress'))}<textarea id="dvTaxAddr" rows="2">${esc((order.taxCustomer&&order.taxCustomer.address)||order.address||'')}</textarea></label>
-            <label class="art-form-full">${esc(T('doc.custTaxId'))}<input type="text" id="dvTaxId" value="${esc((order.taxCustomer&&order.taxCustomer.taxId)||'')}"></label>
-          </div>
-        </div>
-        <div class="doc-opt-block">
-          <span class="doc-opt-label">${esc(T('doc.splitMode'))}</span>
-          <div class="del-seg" id="dvSplit">
-            <button type="button" class="del-seg-btn ${(order.docSplit||'all')!=='split'?'active':''}" data-split="all">${esc(T('doc.splitTogether'))}</button>
-            <button type="button" class="del-seg-btn ${(order.docSplit||'all')==='split'?'active':''}" data-split="split">${esc(T('doc.splitApart'))}</button>
-          </div>
-          <p class="setting-desc" style="margin:6px 0 0;">${esc(T('doc.splitHint'))}</p>
+        <div class="sf-inline-toggle" style="padding:8px 0;">
+          <span>${esc(T('doc.vat'))}</span>
+          <button type="button" class="sf-toggle ${b.vatDefault?'on':'off'}" id="dvVat"><span class="sf-toggle-knob"></span></button>
         </div>
         <div class="doc-opt-block">
           <span class="doc-opt-label">${esc(T('doc.showDiscounts'))}</span>
@@ -3198,90 +1971,47 @@
           <label class="doc-check"><input type="checkbox" id="dvDiscShip" checked> ${esc(T('doc.discShip'))}</label>
           <label class="doc-check"><input type="checkbox" id="dvDiscOverall" checked> ${esc(T('doc.discOverall'))}</label>
         </div>
-        <div class="doc-field">
-          <label for="dvLang">${esc(T('doc.language'))}</label>
+        <label class="art-form-full" style="display:block;margin-bottom:12px;">${esc(T('doc.language'))}
           <select id="dvLang">
             <option value="th" ${((window.appLang&&window.appLang())!=='en')?'selected':''}>${esc(T('doc.langTh'))}</option>
             <option value="en" ${((window.appLang&&window.appLang())==='en')?'selected':''}>${esc(T('doc.langEn'))}</option>
           </select>
-        </div>
-        <p class="setting-desc" style="margin:2px 0 0;">${esc(T('doc.payFromOrder'))}: <b>${esc(dispName('paymentModes', order.paymentMode) || '-')}</b></p>
+        </label>
+        <label class="art-form-full" id="dvPayWrap" style="display:block;margin-bottom:12px;">${esc(T('doc.payMethod'))}
+          <select id="dvPay">
+            <option value="cash">${esc(T('doc.pay.cash'))}</option>
+            <option value="transfer">${esc(T('doc.pay.transfer'))}</option>
+            <option value="other">${esc(T('doc.pay.other'))}</option>
+          </select>
+        </label>
         <div class="art-modal-actions">
           <button class="btn btn-ghost" id="dvCancel">${esc(T('cancel'))}</button>
-          <button class="btn btn-ghost" id="dvSave">${esc(T('save'))}</button>
           <button class="btn btn-primary" id="dvMake">${esc(T('doc.make'))}</button>
-          <button class="btn btn-primary" id="dvMakeGoods" style="display:none;">${esc(T('doc.makeGoods'))}</button>
-          <button class="btn btn-primary" id="dvMakeShip" style="display:none;">${esc(T('doc.makeShip'))}</button>
         </div>
       </div>`;
     document.body.appendChild(ov);
     const close = ()=> ov.remove();
     ov.addEventListener('click', e=>{ if(e.target===ov) close(); });
     ov.querySelector('#dvCancel').addEventListener('click', close);
+    const payWrap = ov.querySelector('#dvPayWrap');
     ov.querySelectorAll('.doc-type-btn').forEach(btn=> btn.addEventListener('click', ()=>{
       type = btn.dataset.dtype;
       ov.querySelectorAll('.doc-type-btn').forEach(x=> x.classList.toggle('active', x===btn));
-      ov.querySelector('#dvTaxFields').style.display = (type === 'tax') ? '' : 'none';
+      payWrap.style.display = DOCDEF[type].showPay ? 'block' : 'none';   // payment line only where money changed hands
     }));
-    // The VAT decision lives on the ORDER: ticking here flips the icon in the table.
-    const vatChk = ov.querySelector('#dvVatChk');
-    // Goods and shipping on one document, or one document each.
-    let splitMode = order.docSplit || 'all';
-    const btnAll = ov.querySelector('#dvMake');
-    const btnGoods = ov.querySelector('#dvMakeGoods');
-    const btnShip = ov.querySelector('#dvMakeShip');
-    const paintSplit = ()=>{
-      const apart = splitMode === 'split';
-      ov.querySelectorAll('#dvSplit [data-split]').forEach(x=> x.classList.toggle('active', x.dataset.split === splitMode));
-      btnAll.style.display = apart ? 'none' : '';
-      btnGoods.style.display = apart ? '' : 'none';
-      btnShip.style.display = apart ? '' : 'none';
-    };
-    paintSplit();
-    // The layout belongs to the BILL: it changes the VAT base, so it is saved,
-    // not re-chosen every time a document is printed.
-    ov.querySelectorAll('#dvSplit [data-split]').forEach(b=> b.addEventListener('click', ()=>{
-      splitMode = b.dataset.split;
-      paintSplit();
-    }));
-    // One explicit Save — it stores the bill settings, logs the change and closes.
-    ov.querySelector('#dvSave').addEventListener('click', async ()=>{
-      const before = JSON.parse(JSON.stringify(order));
-      order.vatable = vatChk.checked;
-      order.docSplit = splitMode;
-      order.editedBy = currentActorName();
-      order.editedAt = new Date().toISOString();
-      await saveOrders();
-      if(before.vatable !== order.vatable || (before.docSplit||'all') !== (order.docSplit||'all')){
-        logRec(orderLog, saveOrderLog, order.id, order.invoiceNumber, 'edit', order);
-      }
-      close();
-      if(typeof onDone === 'function') onDone();
+    const vatBtn = ov.querySelector('#dvVat');
+    vatBtn.addEventListener('click', ()=>{
+      const on = !vatBtn.classList.contains('on');
+      vatBtn.classList.toggle('on', on); vatBtn.classList.toggle('off', !on);
     });
-    const generate = (scope)=>{
-      const taxCustomer = {
-        name: (ov.querySelector('#dvTaxName').value || '').trim(),
-        address: (ov.querySelector('#dvTaxAddr').value || '').trim(),
-        taxId: (ov.querySelector('#dvTaxId').value || '').trim()
-      };
-      if(type === 'tax'){ order.taxCustomer = taxCustomer; saveOrders(); }   // remember for the next print
-      const opts = {
-        type, scope, taxCustomer,
-        vat: vatChk.checked,
-        lang: ov.querySelector('#dvLang').value,
-        showItemDisc: ov.querySelector('#dvDiscItem').checked,
-        showShipDisc: ov.querySelector('#dvDiscShip').checked,
-        showOverallDisc: ov.querySelector('#dvDiscOverall').checked
-      };
+    ov.querySelector('#dvMake').addEventListener('click', ()=>{
+      const opts = { type, vat: vatBtn.classList.contains('on'), pay: ov.querySelector('#dvPay').value, lang: ov.querySelector('#dvLang').value, showItemDisc: ov.querySelector('#dvDiscItem').checked, showShipDisc: ov.querySelector('#dvDiscShip').checked, showOverallDisc: ov.querySelector('#dvDiscOverall').checked };
       const html = buildDocumentHtml(order, opts);
       const w = window.open('', '_blank');
       if(!w){ alert(T('doc.popupBlocked')); return; }
       w.document.open(); w.document.write(html); w.document.close();
       close();
-    };
-    btnAll.addEventListener('click', ()=> generate('all'));
-    btnGoods.addEventListener('click', ()=> generate('goods'));
-    btnShip.addEventListener('click', ()=> generate('shipping'));
+    });
   }
 
   function buildDocumentHtml(order, opts){
@@ -3300,39 +2030,22 @@
     const shipDiscTotal = shipGross - co.shipping;
     const totalDisc = (co.itemDiscTotal||0) + shipDiscTotal + (co.overallAmt||0);
     const anyDisc = opts.showItemDisc || opts.showShipDisc || opts.showOverallDisc;
-    // scope: 'all' (goods + shipping), 'goods' (products only) or 'shipping'.
-    // VAT is charged on whatever THIS document actually covers.
-    const scope = opts.scope || 'all';
-    // A tax invoice bills the customer's COMPANY, so those details replace the
-    // everyday recipient block when they were filled in.
-    const taxCust = (def.taxInvoice && opts.taxCustomer) ? opts.taxCustomer : {};
-    const goodsBase = Math.max(0, (co.itemsNet||0) - (co.overallAmt||0));   // overall discount sits with the goods
-    const shipBase = co.shipping || 0;
-    const splitBill = (order.docSplit === 'split');
-    const beforeVat = scope === 'goods' ? goodsBase : (scope === 'shipping' ? shipBase : goodsBase + shipBase);
-    // On a split bill the shipping side carries no VAT, so a shipping document
-    // (or a combined print of a split bill) only taxes the goods.
-    const vatBase = scope === 'shipping' ? (splitBill ? 0 : shipBase) : (scope === 'goods' ? goodsBase : (splitBill ? goodsBase : beforeVat));
+    const grand = co.net;                       // amount actually received
     const vatOn = !!opts.vat;
-    const vatAmt = vatOn ? vatBase * 0.07 : 0;
-    const grand = beforeVat + vatAmt;
+    const beforeVat = vatOn ? grand * 100 / 107 : grand;
+    const vatAmt = vatOn ? grand - beforeVat : 0;
     const docNo = def.prefix + (order.invoiceNumber || String(order.id).slice(-6));
-    const payLabel = dispName('paymentModes', order.paymentMode) || '-';   // set on the order, not per document
+    const payLabel = opts.pay === 'transfer' ? T('doc.pay.transfer') : (opts.pay === 'other' ? T('doc.pay.other') : T('doc.pay.cash'));
     const esc2 = (s)=> esc(String(s == null ? '' : s));
     const nl2br = (s)=> esc2(s).replace(/\n/g, '<br>');
 
-    const shipLabel = esc(T('doc.shipping'));
-    const rows = scope === 'shipping'
-      ? '<tr><td class="c">1</td><td>-</td><td>'+shipLabel+'</td><td class="c">1</td><td class="r">'+money2(shipBase)+'</td><td class="r">'+money2(shipBase)+'</td></tr>'
-      : (order.items || []).map((it, i)=>{
+    const rows = (order.items || []).map((it, i)=>{
       const amt = (it.qty || 0) * (it.price || 0);
       const saleNote = it.salePercent ? ` <span style="color:#C6432E;">(-${it.salePercent}%)</span>` : '';
       const _col = itemColorLabel(it);
       const colNote = _col ? ' <span style="color:#666;">\u00B7 '+esc2(_col)+'</span>' : '';
-      const prodRef = products.find(x=> x.id === it.productId);
       return '<tr>'+
         '<td class="c">'+(i+1)+'</td>'+
-        '<td>'+esc2((prodRef && prodRef.sku) || '-')+'</td>'+
         '<td>'+esc2(it.productName)+colNote+saleNote+'</td>'+
         '<td class="c">'+(it.qty||0)+'</td>'+
         '<td class="r">'+money2(it.price)+'</td>'+
@@ -3340,31 +2053,21 @@
       '</tr>';
     }).join('');
     const totalsRows =
-      (scope === 'shipping'
-        ? '<tr><td class="tl">'+esc(T('doc.shipping'))+'</td><td class="r">'+money2(shipBase)+'</td></tr>'
-        : '<tr><td class="tl">'+esc(T('doc.subtotal'))+'</td><td class="r">'+money2(co.itemsTotal)+'</td></tr>'+
-          (scope === 'all' ? '<tr><td class="tl">'+esc(T('doc.shipping'))+'</td><td class="r">'+money2(shipGross)+'</td></tr>' : ''))+
-      (scope !== 'shipping' && opts.showItemDisc && co.itemDiscTotal ? '<tr><td class="tl">'+esc(T('doc.itemDiscount'))+'</td><td class="r">-'+money2(co.itemDiscTotal)+'</td></tr>' : '')+
-      (scope !== 'goods' && opts.showShipDisc && shipDiscTotal ? '<tr><td class="tl">'+esc(T('doc.shipDiscount'))+'</td><td class="r">-'+money2(shipDiscTotal)+'</td></tr>' : '')+
-      (scope !== 'shipping' && opts.showOverallDisc && co.overallAmt ? '<tr><td class="tl">'+esc(T('doc.overallDiscount'))+'</td><td class="r">-'+money2(co.overallAmt)+'</td></tr>' : '')+
+      '<tr><td class="tl">'+esc(T('doc.subtotal'))+'</td><td class="r">'+money2(co.itemsTotal)+'</td></tr>'+
+      '<tr><td class="tl">'+esc(T('doc.shipping'))+'</td><td class="r">'+money2(shipGross)+'</td></tr>'+
+      (opts.showItemDisc && co.itemDiscTotal ? '<tr><td class="tl">'+esc(T('doc.itemDiscount'))+'</td><td class="r">-'+money2(co.itemDiscTotal)+'</td></tr>' : '')+
+      (opts.showShipDisc && shipDiscTotal ? '<tr><td class="tl">'+esc(T('doc.shipDiscount'))+'</td><td class="r">-'+money2(shipDiscTotal)+'</td></tr>' : '')+
+      (opts.showOverallDisc && co.overallAmt ? '<tr><td class="tl">'+esc(T('doc.overallDiscount'))+'</td><td class="r">-'+money2(co.overallAmt)+'</td></tr>' : '')+
       (anyDisc && totalDisc ? '<tr class="disc-total"><td class="tl">'+esc(T('doc.totalDiscount'))+'</td><td class="r">-'+money2(totalDisc)+'</td></tr>' : '')+
-      (vatOn && vatAmt ? '<tr><td class="tl">'+esc(T('doc.beforeVat'))+'</td><td class="r">'+money2(beforeVat)+'</td></tr><tr><td class="tl">'+esc(T('doc.vat7'))+'</td><td class="r">'+money2(vatAmt)+'</td></tr>' : '')+
-      '<tr class="grand"><td class="tl">'+esc(T('doc.grand'))+'</td><td class="r">฿'+money2(grand)+'</td></tr>'+
-      (def.deposit
-        ? '<tr><td class="tl">'+esc(T('doc.dp.paid'))+'</td><td class="r">฿'+money2(Number(order.paidAmount)||0)+'</td></tr>'+
-          '<tr class="grand"><td class="tl">'+esc(T('doc.dp.balance'))+'</td><td class="r">฿'+money2(Math.max(0, grand - (Number(order.paidAmount)||0)))+'</td></tr>'
-        : '');
+      (vatOn ? '<tr><td class="tl">'+esc(T('doc.beforeVat'))+'</td><td class="r">'+money2(beforeVat)+'</td></tr><tr><td class="tl">'+esc(T('doc.vat7'))+'</td><td class="r">'+money2(vatAmt)+'</td></tr>' : '')+
+      '<tr class="grand"><td class="tl">'+esc(T('doc.grand'))+'</td><td class="r">฿'+money2(grand)+'</td></tr>';
 
     const logo = b.logo ? '<img class="biz-logo" src="'+esc2(b.logo)+'" alt="">' : '';
     const sign = b.signature ? '<img class="sig-img" src="'+esc2(b.signature)+'" alt="">' : '';
-    // Whoever issued this bill signs on the left; the shop's own signature/stamp stays on the right.
-    const sellerSign = order.sellerSignature ? '<img class="sig-img" src="'+esc2(order.sellerSignature)+'" alt="">' : '';
-    const sellerName = order.seller ? esc2(order.seller) : '';
-    const creatorName = order.createdByLabel || order.createdBy || '';
     const stamp = b.stamp ? '<img class="stamp-img" src="'+esc2(b.stamp)+'" alt="">' : '';
 
     return '<!DOCTYPE html><html lang="'+(opts.lang==='en'?'en':'th')+'"><head><meta charset="utf-8">'+
-      '<title>'+esc(T(def.title))+' '+esc2(docNo)+(scope==='goods'?' ('+esc(T('doc.goodsOnly'))+')':(scope==='shipping'?' ('+esc(T('doc.shipOnly'))+')':''))+'</title>'+
+      '<title>'+esc(T(def.title))+' '+esc2(docNo)+'</title>'+
       '<link rel="preconnect" href="https://fonts.googleapis.com">'+
       '<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">'+
       '<style>'+
@@ -3375,7 +2078,6 @@
         '.page{width:210mm;min-height:297mm;margin:16px auto;background:#fff;padding:18mm 16mm;box-shadow:0 2px 16px rgba(0,0,0,0.15);}'+
         '.head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #333;padding-bottom:14px;margin-bottom:18px;}'+
         '.biz{display:flex;gap:12px;align-items:flex-start;max-width:60%;}'+
-        '.doc-remark{margin:14px 0 4px;padding:10px 12px;border:1px solid #ddd;border-radius:6px;font-size:12px;line-height:1.6;color:#444;}'+
         '.biz-logo{width:64px;height:64px;object-fit:contain;}'+
         '.biz-name{font-size:18px;font-weight:700;}'+
         '.biz-meta{font-size:12px;color:#444;line-height:1.5;margin-top:2px;}'+
@@ -3412,24 +2114,16 @@
       '<div class="page">'+
         '<div class="head">'+
           '<div class="biz">'+logo+'<div><div class="biz-name">'+(bName?esc2(bName):esc(T('doc.yourStore')))+'</div>'+
-            '<div class="biz-meta">'+nl2br(bAddress)+(b.phone?'<br>โทร. '+esc2(b.phone):'')+(b.taxId?'<br>เลขประจำตัวผู้เสียภาษี '+esc2(b.taxId):'')+(b.branch?'<br>'+esc(T('bp.branch'))+' '+esc2(b.branch):'')+'</div></div>'+
+            '<div class="biz-meta">'+nl2br(bAddress)+(b.phone?'<br>โทร. '+esc2(b.phone):'')+(b.taxId?'<br>เลขประจำตัวผู้เสียภาษี '+esc2(b.taxId):'')+'</div></div>'+
           '</div>'+
           '<div class="doc-title"><h1>'+esc(T(def.title))+'</h1>'+
-            '<div class="doc-meta">'+esc(T('doc.no'))+' '+esc2(docNo)+'<br>'+esc(T('doc.date'))+' '+esc2(thaiDate(order.date))+
-              (sellerName ? '<br>'+esc(T('doc.reference'))+' '+sellerName : '')+
-              (creatorName ? '<br>'+esc(T('doc.createdBy'))+' '+esc2(creatorName) : '')+
-            '</div></div>'+
+            '<div class="doc-meta">'+esc(T('doc.no'))+' '+esc2(docNo)+'<br>'+esc(T('doc.date'))+' '+esc2(thaiDate(order.date))+'</div></div>'+
         '</div>'+
         '<div class="party"><div class="lbl">'+esc(T(def.party))+'</div>'+
-          '<div class="nm">'+esc2(taxCust.name || order.customerName || '-')+'</div>'+
-          '<div class="ad">'+
-            nl2br(taxCust.address || order.address)+
-            (taxCust.taxId ? '<br>'+esc(T('doc.custTaxId'))+' '+esc2(taxCust.taxId) : '')+
-            (order.phone ? '<br>'+esc(T('doc.custPhone'))+' '+esc2(order.phone) : '')+
-            (order.invoiceNumber?'<br>'+esc(T('doc.ref'))+' '+esc2(order.invoiceNumber):'')+
-          '</div></div>'+
-        '<table class="items"><thead><tr><th class="c" style="width:6%;">'+esc(T('doc.col.no'))+'</th><th style="width:16%;">'+esc(T('doc.col.code'))+'</th><th>'+esc(T('doc.col.item'))+'</th><th class="c" style="width:9%;">'+esc(T('doc.col.qty'))+'</th><th class="r" style="width:16%;">'+esc(T('doc.col.unit'))+'</th><th class="r" style="width:18%;">'+esc(T('doc.col.amount'))+'</th></tr></thead><tbody>'+
-          (rows || '<tr><td colspan="6" class="c" style="color:#999;padding:18px;">-</td></tr>')+
+          '<div class="nm">'+esc2(order.customerName || '-')+'</div>'+
+          '<div class="ad">'+nl2br(order.address)+(order.invoiceNumber?'<br>'+esc(T('doc.ref'))+' '+esc2(order.invoiceNumber):'')+'</div></div>'+
+        '<table class="items"><thead><tr><th class="c" style="width:8%;">'+esc(T('doc.col.no'))+'</th><th>'+esc(T('doc.col.item'))+'</th><th class="c" style="width:10%;">'+esc(T('doc.col.qty'))+'</th><th class="r" style="width:18%;">'+esc(T('doc.col.unit'))+'</th><th class="r" style="width:20%;">'+esc(T('doc.col.amount'))+'</th></tr></thead><tbody>'+
+          (rows || '<tr><td colspan="5" class="c" style="color:#999;padding:18px;">-</td></tr>')+
         '</tbody></table>'+
         '<div class="bottom">'+
           '<div class="words"><div class="lbl">'+esc(T('doc.amountWords'))+'</div><div class="val">( '+esc2(bahtText(grand))+' )</div>'+
@@ -3437,15 +2131,9 @@
             (def.showPay ? '<div class="pay">'+esc(T('doc.payMethod'))+' : '+esc2(payLabel)+'</div>' : '')+'</div>'+
           '<table class="totals">'+totalsRows+'</table>'+
         '</div>'+
-        (function(){
-          // The remark belongs to the bill. config.docNote is only the default a
-          // new bill starts from — older bills that predate the field fall back to it.
-          const rk = (order.remark != null) ? order.remark : (config.docNote || '');
-          return rk ? '<div class="doc-remark"><b>'+esc(T('cd.remark'))+'</b><br>'+nl2br(rk)+'</div>' : '';
-        })()+
         '<div class="signs">'+
           '<div class="sign-box"><div class="sign-space"></div><div class="sign-line">'+esc(T(def.signL))+'</div></div>'+
-          '<div class="sign-box"><div class="sign-space">'+(sellerSign||sign)+stamp+'</div><div class="sign-line">'+esc(T(def.signR))+(sellerName?' \u00B7 '+sellerName:(bName?' · '+esc2(bName):''))+'</div></div>'+
+          '<div class="sign-box"><div class="sign-space">'+sign+stamp+'</div><div class="sign-line">'+esc(T(def.signR))+(bName?' · '+esc2(bName):'')+'</div></div>'+
         '</div>'+
         '<div class="note">'+esc(T('doc.footNote'))+'</div>'+
       '</div></body></html>';
@@ -3454,10 +2142,6 @@
   function openOrderModal(row, body, onDone){
     if(!row && products.length === 0){ alert(T('rev.noProducts')); return; }
     ordEditingId = row ? row.id : null;
-    // Declared up here on purpose: updatePreview() runs during setup and reads it,
-    // and a `let` declared further down would still be in its temporal dead zone
-    // (even `typeof` throws), which silently killed every listener wired after it.
-    let oSplitMode = (row && row.docSplit === 'split') ? 'split' : 'all';
     const oStatuses = config.orderStatuses || [];
     const iStatuses = config.invoiceStatuses || [];
     const rTags = config.revenueTags || [];
@@ -3486,15 +2170,12 @@
         <div class="art-form-grid">
           <label>${esc(T('exp.date'))} <span class="art-req">*</span><input type="date" id="oDate" value="${row?esc(row.date):today}"></label>
           <label>${esc(T('rev.orderStatus'))}<select id="oOs" ${canChange('changeOrderStatus')?'':'disabled'}>${oStatuses.map(s=>`<option value="${esc(s.name)}" ${row&&row.orderStatus===s.name?'selected':''}>${esc(itemLabel(s))}</option>`).join('')}</select></label>
+          <label>${esc(T('rev.invoiceStatus'))}<select id="oIs" ${canChange('changeInvoiceStatus')?'':'disabled'}>${iStatuses.map(s=>`<option value="${esc(s.name)}" ${row&&row.invoiceStatus===s.name?'selected':''}>${esc(itemLabel(s))}</option>`).join('')}</select></label>
           <label>${esc(T('exp.tag'))}<select id="oTag" ${canChange('changeRevenueTag')?'':'disabled'}>${rTags.map(t=>`<option value="${esc(t.name)}" ${row&&row.tag===t.name?'selected':''}>${esc(itemLabel(t))}</option>`).join('')}</select></label>
-          <label>${esc(T('rev.platform'))}<select id="oPlatform">${(config.platforms||[]).map(pl=> `<option value="${esc(pl.name)}" ${row&&row.platform===pl.name?'selected':''}>${esc(itemLabel(pl))}${pl.fee ? ' \u00B7 '+pl.fee+'%' : ''}</option>`).join('')}</select></label>
-          <label>${esc(T('rev.platformFee'))}<span class="art-fee-pair">
-            <span class="art-fee-inp"><input type="number" id="oFeePct" value="${row&&row.platformFee?row.platformFee:''}" step="0.01" min="0" placeholder="0">%</span>
-            <span class="art-fee-inp"><input type="number" id="oFeeAmt" value="${row&&row.platformFeeAmount?row.platformFeeAmount:''}" step="0.01" min="0" placeholder="0">฿</span>
-          </span></label>
         </div>
         <h4 class="art-form-section">${esc(T('sec.customer'))}</h4>
         <div class="art-form-grid">
+          <label>${esc(T('rev.platform'))}<input type="text" id="oPlatform" value="${row?esc(row.platform||''):''}" placeholder="${esc(T('rev.platformHint'))}"></label>
           <label class="art-form-full">${esc(T('rev.customer'))} <span class="art-req">*</span><input type="text" id="oCustomer" value="${row?esc(row.customerName||''):''}" placeholder="${esc(T('rev.customerHint'))}"></label>
           <label>${esc(T('rev.phone'))}<input type="tel" id="oPhone" value="${row?esc(row.phone||''):''}" placeholder="${esc(T('rev.phoneHint'))}"></label>
         </div>
@@ -3527,55 +2208,11 @@
         <div class="art-form-grid" style="margin-top:6px;">
           <label>${esc(T('rev.overallDiscount'))}<span class="art-disc-inp"><input type="number" id="oOverallDisc" value="${row&&row.overallDiscount?row.overallDiscount:0}" step="0.01" min="0"><select id="oOverallDiscType">${discTypeOpts(row?row.overallDiscountType:'baht')}</select></span></label>
         </div>
-        <h4 class="art-form-section">${esc(T('sec.vat'))}</h4>
-        <div class="art-vat-block">
-          <label class="pc-switch"><input type="checkbox" id="oVat" ${row&&row.vatable?'checked':''}><span>${esc(T('pay.vatable'))}</span></label>
-          <div class="art-vat-mode">
-            <span class="art-vat-mode-label">${esc(T('doc.splitMode'))}</span>
-            <div class="del-seg" id="oSplit">
-              <button type="button" class="del-seg-btn ${(row&&row.docSplit==='split')?'':'active'}" data-split="all">${esc(T('doc.splitTogether'))}</button>
-              <button type="button" class="del-seg-btn ${(row&&row.docSplit==='split')?'active':''}" data-split="split">${esc(T('doc.splitApart'))}</button>
-            </div>
-          </div>
-          <p class="setting-desc" style="margin:6px 0 0;">${esc(T('doc.splitHint'))}</p>
-        </div>
-        <h4 class="art-form-section">${esc(T('sec.payment'))}</h4>
-        <div class="art-form-grid">
-          <label>${esc(T('rev.invoiceStatus'))}<select id="oIs" ${canChange('changeInvoiceStatus')?'':'disabled'}>${iStatuses.map(s=>`<option value="${esc(s.name)}" ${row&&row.invoiceStatus===s.name?'selected':''}>${esc(itemLabel(s))}</option>`).join('')}</select></label>
-          <label>${esc(T('pay.mode'))}<select id="oPayMode">${(config.paymentModes||[]).map(m=> `<option value="${esc(m.name)}" ${row&&row.paymentMode===m.name?'selected':''}>${esc(itemLabel(m))}</option>`).join('')}</select></label>
-          <label>${esc(T('pay.paid'))}<input type="number" id="oPaid" value="${row&&row.paidAmount?row.paidAmount:''}" step="0.01" min="0" placeholder="0"></label>
-          <label>${esc(T('pay.pending'))}<span class="art-pending-box"><b id="oPending">0</b> ฿</span></label>
-          <div class="art-form-full art-proof-field">
-            <div class="art-img-label">${esc(T('pay.proof'))} <span class="pi-hint">${esc(T('pay.proofHint'))}</span></div>
-            <div class="pi-grid" id="oPayProofs"></div>
-          </div>
-        </div>
-        <h4 class="art-form-section">${esc(T('sec.seller'))} <span class="art-req">*</span></h4>
-        <div class="art-seller">
-          <div class="art-seller-who">
-            <div class="art-seller-label">${esc(T('sell.issuedBy'))}</div>
-            <div class="art-seller-name" id="oSellerName">${esc(row && row.seller ? row.seller : sellerNameOf())}</div>
-          </div>
-          <div class="art-seller-sign">
-            <div class="art-seller-label">${esc(T('sell.signature'))}</div>
-            <canvas id="oSignPad" class="art-sign-pad" width="520" height="150"></canvas>
-            <div class="art-sign-actions">
-              <button type="button" class="btn btn-ghost" id="oSignClear">${esc(T('sell.clear'))}</button>
-              <label class="file-picker">
-                <input type="file" id="oSignFile" accept="image/*">
-                <span class="file-picker-btn">${esc(T('sell.upload'))}</span>
-              </label>
-              <span class="pi-hint">${esc(T('sell.signHint'))}</span>
-            </div>
-          </div>
-        </div>
-        <label class="art-form-note">${esc(T('cd.remark'))} <span class="pi-hint">${esc(T('rev.remarkHint'))}</span><textarea id="oRemark" rows="3">${esc(row ? (row.remark != null ? row.remark : (config.docNote||'')) : (config.docNote||''))}</textarea></label>
-        <label class="art-form-note">${esc(T('exp.note'))} <span class="pi-hint">${esc(T('rev.noteHint'))}</span><textarea id="oNote" rows="2">${row?esc(row.note||''):''}</textarea></label>
+        <label class="art-form-note">${esc(T('exp.note'))}<textarea id="oNote" rows="2">${row?esc(row.note||''):''}</textarea></label>
         <div class="art-modal-preview">
           <span>${esc(T('rev.itemsTotal'))}: <b id="oPvItems">0</b></span>
           <span>${esc(T('rev.shippingCost'))}: <b id="oPvShip">0</b></span>
           <span>${esc(T('rev.totalDiscount'))}: <b id="oPvDisc">0</b></span>
-          <span>${esc(T('doc.vat7'))}: <b id="oPvVat">0</b></span>
           <span>${esc(T('exp.net'))}: <b id="oPvNet">0</b></span>
         </div>
         <div class="art-modal-actions">
@@ -3768,24 +2405,7 @@
       g('oPvItems').textContent = fmt(itemsNet);
       if(g('oPvShip')) g('oPvShip').textContent = fmt(shipping);
       if(g('oPvDisc')) g('oPvDisc').textContent = fmt(totalDisc);
-      const vatOn = g('oVat') ? g('oVat').checked : false;
-      const splitNow = oSplitMode === 'split';
-      const vatBase = splitNow ? Math.max(0, itemsNet - overallAmt) : net;   // shipping is outside a split bill's VAT
-      const vatAmt = vatOn ? vatBase * 0.07 : 0;
-      const netWithVat = net + vatAmt;
-      const pvVat = g('oPvVat');
-      if(pvVat) pvVat.parentElement.style.display = vatOn ? '' : 'none';
-      if(pvVat) pvVat.textContent = fmt(vatAmt);
-      g('oPvNet').textContent = fmt(netWithVat);
-      const paid = parseFloat(g('oPaid') ? g('oPaid').value : 0) || 0;
-      const pendEl = g('oPending');
-      if(pendEl){
-        const _pn = paidStatusName();
-        const _isPaid = !!_pn && g('oIs') && g('oIs').value === _pn;
-        const pend = _isPaid ? 0 : (netWithVat - paid);
-        pendEl.textContent = fmt(pend);
-        pendEl.classList.toggle('art-pending-clear', pend <= 0 && net > 0);
-      }
+      g('oPvNet').textContent = fmt(net);
       const box=g('oItems'); if(box) items.forEach((it,i)=>{ const el=box.querySelector('.art-item-net[data-net="'+i+'"]'); if(el) el.innerHTML = fmt(itemNet(it)) + (it.salePercent?` <i class="art-item-sale">-${it.salePercent}%</i>`:''); });
       const sbox=g('oShipList'); if(sbox){ const srows=shipRows(); sbox.querySelectorAll('.art-ship-net').forEach(el=>{ const r=srows.find(x=> x.cat===el.dataset.shipnet); if(r) el.textContent=fmt(shipNetOf(r)); }); }
     }
@@ -3797,80 +2417,6 @@
     }
     drawItems(); fillShipList(); updatePreview(); updateInv();
     g('oAddItem').addEventListener('click', ()=>{ items.push({ productName:'', qty:1, price:0, colorId:null, colorName:'', costAllocation:[] }); drawItems(); fillShipList(); updatePreview(); });
-    // ---- payment slips: up to five images per bill ----
-    let payProofs = (row && Array.isArray(row.paymentProofs)) ? row.paymentProofs.slice(0,5) : [];
-    function drawPayProofs(){
-      const wrap = g('oPayProofs'); if(!wrap) return;
-      wrap.innerHTML = payProofs.map((f,i)=> `<span class="pi-thumb"><img src="${esc(f.src)}" alt=""><button type="button" class="pi-rm" data-j="${i}" title="${esc(T('delete'))}">\u2715</button></span>`).join('')
-        + (payProofs.length < 5 ? `<label class="pi-add"><input type="file" id="oProofInput" accept="image/*" multiple><span>+</span></label>` : '');
-      wrap.querySelectorAll('.pi-rm').forEach(b=> b.addEventListener('click', (e)=>{ e.preventDefault(); payProofs.splice(+b.dataset.j, 1); drawPayProofs(); }));
-      const inp = wrap.querySelector('#oProofInput');
-      if(inp) inp.addEventListener('change', (e)=>{
-        Array.from(e.target.files || []).forEach(file=>{
-          if(payProofs.length >= 5) return;
-          if(file.size > 256*1024){ alert(T('bill.tooBig')); return; }
-          const rd = new FileReader();
-          rd.onload = ()=>{ if(payProofs.length < 5){ payProofs.push({ src: rd.result, name: file.name || '' }); drawPayProofs(); } };
-          rd.readAsDataURL(file);
-        });
-      });
-    }
-    drawPayProofs();
-    // ---- signature: draw with the mouse/finger, or upload an image ----
-    let signData = row ? (row.sellerSignature || null) : null;
-    let signDirty = !!signData;
-    (function initSign(){
-      const cv = g('oSignPad'); if(!cv) return;
-      const ctx = cv.getContext('2d');
-      ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-      ctx.strokeStyle = '#111';
-      const paint = ()=>{
-        ctx.clearRect(0,0,cv.width,cv.height);
-        if(!signData) return;
-        const img = new Image();
-        img.onload = ()=>{
-          const sc = Math.min(cv.width/img.width, cv.height/img.height, 1);
-          const w = img.width*sc, h = img.height*sc;
-          ctx.drawImage(img, (cv.width-w)/2, (cv.height-h)/2, w, h);
-        };
-        img.src = signData;
-      };
-      paint();
-      let drawing = false;
-      const pos = (e)=>{
-        const r = cv.getBoundingClientRect();
-        const p = (e.touches && e.touches[0]) ? e.touches[0] : e;
-        return { x: (p.clientX - r.left) * (cv.width / r.width), y: (p.clientY - r.top) * (cv.height / r.height) };
-      };
-      const start = (e)=>{ e.preventDefault(); drawing = true; const q = pos(e); ctx.beginPath(); ctx.moveTo(q.x, q.y); };
-      const move  = (e)=>{ if(!drawing) return; e.preventDefault(); const q = pos(e); ctx.lineTo(q.x, q.y); ctx.stroke(); };
-      const end   = ()=>{ if(!drawing) return; drawing = false; signData = cv.toDataURL('image/png'); signDirty = true; };
-      cv.addEventListener('mousedown', start); cv.addEventListener('mousemove', move);
-      window.addEventListener('mouseup', end);
-      cv.addEventListener('touchstart', start, { passive:false });
-      cv.addEventListener('touchmove', move, { passive:false });
-      cv.addEventListener('touchend', end);
-      g('oSignClear').addEventListener('click', ()=>{ signData = null; signDirty = false; ctx.clearRect(0,0,cv.width,cv.height); });
-      g('oSignFile').addEventListener('change', (e)=>{
-        const file = e.target.files[0]; if(!file) return;
-        if(file.size > 256*1024){ alert(T('bill.tooBig')); e.target.value=''; return; }
-        const rd = new FileReader();
-        rd.onload = ()=>{ signData = rd.result; signDirty = true; paint(); };
-        rd.readAsDataURL(file);
-      });
-    })();
-    g('oPlatform').addEventListener('change', ()=>{
-      const pl = (config.platforms||[]).find(x=> x.name === g('oPlatform').value);
-      g('oFeePct').value = (pl && pl.fee) ? pl.fee : '';
-    });
-    g('oPaid').addEventListener('input', updatePreview);
-    g('oVat').addEventListener('change', updatePreview);
-    g('oIs').addEventListener('change', updatePreview);   // settled bills owe nothing
-    body.querySelectorAll('#oSplit [data-split]').forEach(btn=> btn.addEventListener('click', ()=>{
-      oSplitMode = btn.dataset.split;
-      body.querySelectorAll('#oSplit [data-split]').forEach(x=> x.classList.toggle('active', x.dataset.split === oSplitMode));
-      updatePreview();
-    }));
     g('oOverallDisc').addEventListener('input', updatePreview);
     g('oOverallDiscType').addEventListener('change', updatePreview);
     g('oShipOverride').addEventListener('input', ()=>{ const v=g('oShipOverride').value; shipOverride=(v===''?null:v); updatePreview(); });
@@ -3961,7 +2507,6 @@
       const cleanItems = items.filter(it=> it.productId || it.productName.trim());
       if(cleanItems.length === 0){ alert(T('rev.errItems')); return; }
       if(cleanItems.some(it=> !it.productId)){ alert(T('rev.errPickProduct')); return; }
-      if(!signData){ alert(T('sell.errSign')); return; }
       const _noColor = cleanItems.find(it=> colorsOf(it.productId).length && !it.colorId);
       if(_noColor){ alert(T('rev.errPickColor').replace('{p}', _noColor.productName||'')); return; }
       // cost-lot allocation: each item must be fully allocated; no lot over-drawn.
@@ -3986,16 +2531,6 @@
         shippingOverride: (g('oShipOverride').value===''?null:Math.abs(parseFloat(g('oShipOverride').value)||0)),
         shippingCost: computeShipping(),
         shipDiscByCat: shipDiscByCat,
-        remark: g('oRemark') ? g('oRemark').value.trim() : '',
-        vatable: g('oVat') ? g('oVat').checked : false,
-        docSplit: oSplitMode,
-        paymentProofs: payProofs.slice(0,5),
-        seller: (row && row.seller) ? row.seller : sellerNameOf(),
-        sellerSignature: signData || null,
-        platformFee: Math.abs(parseFloat(g('oFeePct').value)||0),
-        platformFeeAmount: Math.abs(parseFloat(g('oFeeAmt').value)||0),
-        paymentMode: g('oPayMode') ? g('oPayMode').value : '',
-        paidAmount: Math.abs(parseFloat(g('oPaid').value)||0),
         overallDiscount: Math.abs(parseFloat(g('oOverallDisc').value)||0),
         overallDiscountType: g('oOverallDiscType').value,
         note: g('oNote').value.trim(),
@@ -4004,16 +2539,8 @@
       if(ordEditingId && row && date === row.date){ data.invoiceNumber = row.invoiceNumber || generateInvoiceNumber(date, ordEditingId); }
       else data.invoiceNumber = generateInvoiceNumber(date, ordEditingId);
       const _now = new Date().toISOString();
-      if(ordEditingId){
-        data.createdBy = (row && row.createdBy) || currentActorName();
-        data.createdByLabel = (row && row.createdByLabel) || sellerNameOf();
-        data.createdAt = (row && row.createdAt) || _now;
-        data.editedBy = currentActorName(); data.editedAt = _now;
-      }else{
-        data.createdBy = currentActorName();
-        data.createdByLabel = sellerNameOf();   // employee name, or Admin/Developer
-        data.createdAt = _now;
-      }
+      if(ordEditingId){ data.createdBy = (row && row.createdBy) || currentActorName(); data.createdAt = (row && row.createdAt) || _now; data.editedBy = currentActorName(); data.editedAt = _now; }
+      else { data.createdBy = currentActorName(); data.createdAt = _now; }
       if(ordEditingId){ orders = orders.map(o=> o.id===ordEditingId ? data : o); logRec(orderLog, saveOrderLog, data.id, data.invoiceNumber, 'edit', data); }
       else { orders.push(data); logRec(orderLog, saveOrderLog, data.id, data.invoiceNumber, 'create', data); }
       await saveOrders();
@@ -4025,10 +2552,6 @@
   // Public stock snapshot for shop.html: remaining per product + per colour.
   // Quantities ONLY — cost lots and orders never leave the back office.
   async function syncPublicStock(){
-    // Status follows stock, so refresh it here — this runs after every save that
-    // can move stock (products, lots, orders). Written directly to avoid
-    // recursing back into saveProducts().
-    if(syncProductTags()) await window.Store.set(K_PRODUCTS, products);
     const snap = {};
     products.forEach(p=>{
       const entry = { total: stockOf(p).remaining, colors: {} };
@@ -4150,17 +2673,6 @@
     const full = ((e.name || '') + ' ' + (e.surname || '')).trim();
     return full || e.username || 'Developer';
   }
-  // Who is issuing the bill. A real seller shows their own name; system accounts
-  // stay generic — an admin is just "Admin", the dev account just "Developer".
-  function sellerNameOf(){
-    const e = window.currentEmployee;
-    if(!e) return '—';
-    if(e.roleKey === 'developer') return 'Developer';
-    const rt = (typeof window.roleTypeOf === 'function') ? window.roleTypeOf(e.roleKey) : '';
-    if(rt === 'admin' || e.roleKey === 'admin') return 'Admin';
-    const full = ((e.name || '') + ' ' + (e.surname || '')).trim();
-    return full || e.username || 'Admin';
-  }
   // Per-role permission to change a given status/tag type (system roles = allowed).
   function canChange(target){ return (typeof window.roleCanAccess !== 'function') || window.roleCanAccess(window.currentRole, target); }
   // Lazy-load the bundled TH geography data (province/district/subdistrict + postal) on first use.
@@ -4189,18 +2701,6 @@
     return _thMapP;
   }
   function prodTagColor(name){ return (PRODUCT_TAGS.find(t=> t.name === name) || {}).color || '#999'; }
-  // In Stock while anything is left, Out of Stock the moment it runs out.
-  function productStatusOf(p){ return stockOf(p).remaining > 0 ? 'In Stock' : 'Out of Stock'; }
-  function prodTagLabel(name){ const t = PRODUCT_TAGS.find(x=> x.name === name); return t ? itemLabel(t) : name; }
-  // Keeps the stored tag in step with reality (the storefront and exports read p.tag).
-  function syncProductTags(){
-    let changed = false;
-    products.forEach(p=>{
-      const want = productStatusOf(p);
-      if(p.tag !== want){ p.tag = want; changed = true; }
-    });
-    return changed;
-  }
   function ptypeColor(name){ return ((config.productTypes||[]).find(t=> t.name === name) || {}).color || '#999'; }
   function originColor(name){ return ((config.costOrigins||[]).find(o=> o.name === name) || {}).color || '#8A8F80'; }
   // Stock accounting for a product across all orders (matched by productId).
@@ -4325,7 +2825,7 @@
           <td class="num art-reserved">${st.reserved || '-'}</td>
           <td class="num art-sold">${st.sold || '-'}</td>
           <td>${p.productType ? `<span class="art-pill" style="background:${ptypeColor(p.productType)}">${esc(p.productType)}</span>` : '<span style="color:var(--c-muted);">-</span>'}</td>
-          <td><span class="art-pill" style="background:${prodTagColor(productStatusOf(p))}">${esc(prodTagLabel(productStatusOf(p)))}</span></td>
+          <td><span class="art-pill" style="background:${prodTagColor(p.tag)}">${esc(p.tag||'In Stock')}</span></td>
           <td class="art-edited">${esc(editedLabel(p))}</td>
           <td><div class="art-row-actions">
             <button class="acc-icon art-prod-edit" title="${esc(T('edit'))}">✎</button>
@@ -4390,6 +2890,7 @@
     prodEditingId = row ? row.id : null;
     prodImageData = row ? (row.image || null) : null;
     prodBillData = null;
+    const isNewProd = !row;
     let pHasColors = !!(row && row.hasColors);
     let pColors = (row && Array.isArray(row.colors)) ? JSON.parse(JSON.stringify(row.colors)) : [];
     pColors.forEach(c=>{ if(!Array.isArray(c.images)) c.images = c.image ? [c.image] : []; if(!Array.isArray(c.imageNames)) c.imageNames = []; while(c.imageNames.length < c.images.length) c.imageNames.push(''); });
@@ -4406,6 +2907,7 @@
         <h4 class="art-form-section">${esc(T('sec.detail'))}</h4>
         <div class="art-form-grid">
           <label>${esc(T('prod.sku'))}<input type="text" id="pSku" value="${row?esc(row.sku):''}"></label>
+          <label>${esc(T('prod.tag'))}<select id="pTag" ${canChange('changeProductStatus')?'':'disabled'}>${PRODUCT_TAGS.map(t=>`<option value="${esc(t.name)}" ${row&&row.tag===t.name?'selected':''}>${esc(itemLabel(t))}</option>`).join('')}</select></label>
           <label class="art-form-full">${esc(T('prod.name'))}<input type="text" id="pName" value="${row?esc(row.name):''}"></label>
           <label class="art-form-full">${esc(T('prod.ptype'))} <span class="art-req">*</span><select id="pType"><option value="">${esc(T('prod.pickType'))}</option>${(config.productTypes||[]).map(t=>`<option value="${esc(t.name)}" ${row&&row.productType===t.name?'selected':''}>${esc(itemLabel(t))}</option>`).join('')}</select></label>
           <label class="art-form-full">${esc(T('prod.desc'))}<textarea id="pDesc" rows="3" placeholder="${esc(T('prod.descPh'))}">${row?esc(row.description||''):''}</textarea></label>
@@ -4417,9 +2919,15 @@
         <h4 class="art-form-section">${esc(T('pc.section'))}</h4>
         <label class="pc-switch"><input type="checkbox" id="pHasColors" ${pHasColors?'checked':''}><span>${esc(T('pc.enable'))}</span></label>
         <div class="pc-list" id="pColorList" style="${pHasColors?'':'display:none;'}"></div>
+        <h4 class="art-form-section">${esc(T('sec.cost'))}</h4>
+        <div class="art-form-grid">
+          <label>${esc(T('prod.origin'))}<select id="pOrigin">${(config.costOrigins||[]).map(o=>`<option value="${esc(o.name)}">${esc(o.name)}</option>`).join('')}</select></label>
+          <label id="pCostField" style="${pHasColors?'display:none;':''}">${esc(T('prod.cost'))}<input type="number" id="pCost" value="${row?row.cost:0}" step="0.01"></label>
+        </div>
         <div id="pSellFields" style="${pHasColors?'display:none;':''}">
         <h4 class="art-form-section">${esc(T('sec.selling'))}</h4>
         <div class="art-form-grid">
+          <label>${esc(T('prod.stock'))}<input type="number" id="pStock" value="${row?row.stock:0}" step="1"></label>
           <label>${esc(T('prod.price'))}<input type="number" id="pPrice" value="${row?row.price:0}" step="0.01"></label>
         </div>
         </div>
@@ -4476,6 +2984,7 @@
             <input type="color" class="pc-hex" data-i="${i}" value="${esc(c.hex||'#000000')}">
             <input type="text" class="pc-name" data-i="${i}" value="${esc(c.name||'')}" placeholder="${esc(T('pc.namePh'))}">
             <input type="number" class="pc-num pc-price" data-i="${i}" value="${c.price!=null?c.price:''}" step="0.01" placeholder="${esc(T('prod.price'))}" title="${esc(T('prod.price'))}">
+            ${isNewProd ? `<input type="number" class="pc-num pc-qty" data-i="${i}" value="${c.qty!=null?c.qty:''}" step="1" min="0" placeholder="${esc(T('prod.stock'))}" title="${esc(T('prod.stock'))}"><input type="number" class="pc-num pc-cost" data-i="${i}" value="${c.cost!=null?c.cost:''}" step="0.01" placeholder="${esc(T('prod.cost'))}" title="${esc(T('prod.cost'))}">` : ''}
             <button type="button" class="pc-del" data-i="${i}" title="${esc(T('delete'))}">\u2715</button>
           </div>
           <div class="pi-grid pc-imgs">${thumbsHtml(c.images, 'sm', `data-ci="${i}"`)}${c.images.length < 5 ? `<label class="pi-add sm" title="${esc(T('pc.image'))}"><input type="file" class="pc-img" data-i="${i}" accept="image/*" multiple><span>+</span></label>` : ''}</div>
@@ -4483,6 +2992,8 @@
       wrap.querySelectorAll('.pc-hex').forEach(inp=> inp.addEventListener('input', ()=>{ pColors[+inp.dataset.i].hex = inp.value; }));
       wrap.querySelectorAll('.pc-name').forEach(inp=> inp.addEventListener('input', ()=>{ pColors[+inp.dataset.i].name = inp.value; }));
       wrap.querySelectorAll('.pc-price').forEach(inp=> inp.addEventListener('input', ()=>{ pColors[+inp.dataset.i].price = inp.value === '' ? null : (parseFloat(inp.value)||0); }));
+      wrap.querySelectorAll('.pc-qty').forEach(inp=> inp.addEventListener('input', ()=>{ pColors[+inp.dataset.i].qty = inp.value === '' ? '' : (parseInt(inp.value)||0); }));
+      wrap.querySelectorAll('.pc-cost').forEach(inp=> inp.addEventListener('input', ()=>{ pColors[+inp.dataset.i].cost = inp.value === '' ? '' : (parseFloat(inp.value)||0); }));
       wrap.querySelectorAll('.pc-img').forEach(inp=> inp.addEventListener('change', (e)=>{ const c = pColors[+inp.dataset.i]; if(!Array.isArray(c.imageNames)) c.imageNames = []; addImageFiles(e.target.files, c.images, c.imageNames, drawColors); }));
       wrap.querySelectorAll('.pc-imgs .pi-rm').forEach(btn=> btn.addEventListener('click', ()=>{ const c = pColors[+btn.dataset.ci], j = +btn.dataset.j; c.images.splice(j, 1); if(Array.isArray(c.imageNames)) c.imageNames.splice(j, 1); drawColors(); }));
       wrap.querySelectorAll('.pc-del').forEach(btn=> btn.addEventListener('click', ()=>{ pColors.splice(+btn.dataset.i, 1); drawColors(); }));
@@ -4494,6 +3005,7 @@
       if(pHasColors && pColors.length === 0) pColors = defaultColors();
       const wrap = g('pColorList'); if(wrap) wrap.style.display = pHasColors ? '' : 'none';
       const imgField = g('pImgField'); if(imgField) imgField.style.display = pHasColors ? 'none' : '';
+      const costField = g('pCostField'); if(costField) costField.style.display = pHasColors ? 'none' : '';
       const sellFields = g('pSellFields'); if(sellFields) sellFields.style.display = pHasColors ? 'none' : '';
       drawColors();
     });
@@ -4521,8 +3033,8 @@
       const data = {
         id: prodEditingId || rid(), sku, name, productType,
         description: (g('pDesc') ? g('pDesc').value.trim() : ''),
-        cost: row ? (row.cost || 0) : 0, price: parseFloat(g('pPrice').value)||0,
-        stock: row ? (row.stock || 0) : 0, tag: (row ? (row.tag || 'In Stock') : 'Out of Stock'),
+        cost: parseFloat(g('pCost').value)||0, price: parseFloat(g('pPrice').value)||0,
+        stock: parseInt(g('pStock').value)||0, tag: g('pTag').value,
         image: pImages[0] || null, images: pImages.slice(0,5), imageNames: pImageNames.slice(0,5),
         hasColors: pHasColors,
         colors: pHasColors ? pColors.map(c=>{ const im = (Array.isArray(c.images)?c.images:[]).slice(0,5); return { id: c.id, name: c.name, hex: c.hex, price: (c.price === '' || c.price == null) ? null : Number(c.price), images: im, imageNames: (Array.isArray(c.imageNames)?c.imageNames:[]).slice(0,5), image: im[0] || null }; }) : []
@@ -4530,6 +3042,7 @@
       if(pHasColors){
         const _ps = data.colors.map(c=> Number(c.price)||0).filter(v=> v > 0);
         data.price = _ps.length ? Math.min.apply(null, _ps) : 0;
+        if(!prodEditingId) data.stock = pColors.reduce((sm,c)=> sm + (parseInt(c.qty)||0), 0);
       }
       const _pnow = new Date().toISOString();
       if(prodEditingId){
@@ -4543,10 +3056,32 @@
         data.createdBy = currentActorName(); data.createdAt = _pnow;
         products.push(data);
         logRec(productLog, saveProductLog, data.id, (data.name||'')+(data.sku?' ('+data.sku+')':''), 'create', data, { imageChanges: imageChangeList(null, data) });
-        // A new product starts EMPTY: stock and cost only ever enter through Restock.
+        const _origin = g('pOrigin') ? g('pOrigin').value : '';
         const _iso = new Date().toISOString(), _day = _iso.slice(0,10);
-        stockLog.push({ id: rid(), date: _day, productId: data.id, productName: data.name, productType: data.productType||'', qty: 0, signature: currentActorName(), type: 'new', origin: '', cost: 0, bill: prodBillData, createdAt: _iso });
+        if(pHasColors && data.colors.length){
+          // Opening stock is per colour: one cost lot (and one stock-log entry) each.
+          let _any = false;
+          data.colors.forEach((c, idx)=>{
+            const q = parseInt(pColors[idx].qty) || 0;
+            const cst = parseFloat(pColors[idx].cost) || 0;
+            if(q <= 0) return;
+            addToLot(data.id, _origin, cst, q, currentActorName(), c.id); _any = true;
+            stockLog.push({ id: rid(), date: _day, productId: data.id, colorId: c.id, productName: data.name + ' \u00B7 ' + (c.name||''), productType: data.productType||'', qty: q, signature: currentActorName(), type: 'new', origin: _origin, cost: cst, bill: prodBillData, createdAt: _iso });
+            postStockExpense({ date: _day, details: T('exp.newStockOf').replace('{p}', data.name + ' \u00B7 ' + (c.name||'')), qty: q, cost: cst, origin: _origin, productId: data.id, colorId: c.id, source:'newproduct' });
+          });
+          if(_any) await saveLots();
+          else stockLog.push({ id: rid(), date: _day, productId: data.id, productName: data.name, productType: data.productType||'', qty: 0, signature: currentActorName(), type: 'new', origin: _origin, cost: 0, bill: prodBillData, createdAt: _iso });
+        }else{
+          if(data.stock > 0){
+            addToLot(data.id, _origin, data.cost, data.stock, currentActorName());
+            postStockExpense({ date: _day, details: T('exp.newStockOf').replace('{p}', data.name), qty: data.stock, cost: data.cost, origin: _origin, productId: data.id, source:'newproduct' });
+            await saveLots();
+          }
+          // Every new product logs a "New Product" entry, auto-stamped with who added it.
+          stockLog.push({ id: rid(), date: _day, productId: data.id, productName: data.name, productType: data.productType||'', qty: data.stock, signature: currentActorName(), type: 'new', origin: _origin, cost: data.cost, bill: prodBillData, createdAt: _iso });
+        }
         await saveStockLog();
+        await saveExpenses();
       }
       await saveProducts();
       close();
@@ -4857,9 +3392,7 @@
           <label class="art-form-full">${esc(T('rst.product'))} <span class="art-req">*</span>
             <select id="rsProduct"></select>
           </label>
-          <label id="rsColorField" style="display:none;">${esc(T('pc.colorLabel'))} <span class="art-req">*</span>
-            <span class="rs-color-row"><span class="rs-swatch" id="rsSwatch"></span><select id="rsColor"></select></span>
-          </label>
+          <label id="rsColorField" style="display:none;">${esc(T('pc.colorLabel'))} <span class="art-req">*</span><select id="rsColor"></select></label>
           <label>${esc(T('rst.qty'))} <span class="art-req">*</span><input type="number" id="rsQty" value="1" step="1" min="1"></label>
           <label>${esc(T('rst.date'))}<input type="date" id="rsDate" value="${new Date().toISOString().slice(0,10)}"></label>
         </div>
@@ -4901,21 +3434,10 @@
       const field = g('rsColorField');
       if(!cols.length){ field.style.display = 'none'; g('rsColor').innerHTML = ''; return; }
       field.style.display = '';
-      g('rsColor').innerHTML = cols.map(c=> `<option value="${esc(c.id)}" data-hex="${esc(c.hex||'#888')}">${esc(c.name||'-')} \u00B7 ${esc(T('prod.stock'))} ${stockOfColor(prod, c.id).remaining}</option>`).join('');
-      paintSwatch();
-    }
-    // Show the actual colour the user picked when the product was created.
-    function paintSwatch(){
-      const sel = g('rsColor'), sw = g('rsSwatch');
-      if(!sel || !sw) return;
-      const opt = sel.options[sel.selectedIndex];
-      const hex = opt ? (opt.dataset.hex || '#888') : '#888';
-      sw.style.background = hex;
-      sw.title = opt ? opt.textContent : '';
+      g('rsColor').innerHTML = cols.map(c=> `<option value="${esc(c.id)}">${esc(c.name||'-')} \u00B7 ${esc(T('prod.stock'))} ${stockOfColor(prod, c.id).remaining}</option>`).join('');
     }
     g('rsType').addEventListener('change', ()=>{ fillProducts(); fillColors(); });
     g('rsProduct').addEventListener('change', fillColors);
-    g('rsColor').addEventListener('change', paintSwatch);
     fillProducts();
     fillColors();
     const close = ()=> ov.remove();
@@ -5019,73 +3541,6 @@
     renderStockHistTable(body);
   }
 
-  // Payment slips: shown together with per-file download links.
-  // Attach/replace the payment slips without opening the whole order form.
-  function openProofEditor(order, onDone){
-    let list = Array.isArray(order.paymentProofs) ? order.paymentProofs.slice(0,5) : [];
-    const ov = document.createElement('div');
-    ov.className = 'art-modal-overlay show';
-    ov.innerHTML = `<div class="art-modal" style="max-width:560px;">
-      <h3 class="art-modal-title">${esc(T('pay.proof'))} \u00B7 ${esc(order.invoiceNumber||'')}</h3>
-      <p class="setting-desc" style="margin:-4px 0 12px;">${esc(T('pay.proofHint'))}</p>
-      <div class="pi-grid" id="peGrid"></div>
-      <div class="art-modal-actions">
-        <button class="btn btn-ghost" id="peCancel">${esc(T('cancel'))}</button>
-        <button class="btn btn-primary" id="peSave">${esc(T('save'))}</button>
-      </div>
-    </div>`;
-    document.body.appendChild(ov);
-    const grid = ov.querySelector('#peGrid');
-    function draw(){
-      grid.innerHTML = list.map((f,i)=> `<span class="pi-thumb"><img src="${esc(f.src)}" alt=""><button type="button" class="pi-rm" data-j="${i}" title="${esc(T('delete'))}">\u2715</button></span>`).join('')
-        + (list.length < 5 ? `<label class="pi-add"><input type="file" class="pe-input" accept="image/*" multiple><span>+</span></label>` : '');
-      grid.querySelectorAll('.pi-rm').forEach(b=> b.addEventListener('click', ()=>{ list.splice(+b.dataset.j, 1); draw(); }));
-      const inp = grid.querySelector('.pe-input');
-      if(inp) inp.addEventListener('change', (e)=>{
-        Array.from(e.target.files || []).forEach(file=>{
-          if(list.length >= 5) return;
-          if(file.size > 256*1024){ alert(T('bill.tooBig')); return; }
-          const rd = new FileReader();
-          rd.onload = ()=>{ if(list.length < 5){ list.push({ src: rd.result, name: file.name || '' }); draw(); } };
-          rd.readAsDataURL(file);
-        });
-      });
-      // Existing slips stay viewable from here too.
-      grid.querySelectorAll('.pi-thumb img').forEach((im,i)=> im.addEventListener('click', ()=> openProofs([list[i]], order.invoiceNumber)));
-    }
-    draw();
-    const close = ()=> ov.remove();
-    ov.addEventListener('click', e=>{ if(e.target === ov) close(); });
-    ov.querySelector('#peCancel').addEventListener('click', close);
-    ov.querySelector('#peSave').addEventListener('click', async ()=>{
-      order.paymentProofs = list.slice(0,5);
-      await saveOrders();
-      close();
-      if(typeof onDone === 'function') onDone();
-    });
-  }
-  function openProofs(list, label){
-    const arr = (list||[]).filter(Boolean);
-    if(!arr.length) return;
-    const ov = document.createElement('div');
-    ov.className = 'art-modal-overlay show';
-    ov.innerHTML = `<div class="art-modal" style="max-width:720px;">
-      <h3 class="art-modal-title">${esc(T('pay.proof'))}${label ? ' \u00B7 ' + esc(label) : ''}</h3>
-      <div class="pf-list">${arr.map((f,i)=> `
-        <div class="pf-item">
-          <img src="${esc(f.src)}" alt="">
-          <div class="pf-meta">
-            <span class="pf-name">${esc(f.name || ('proof-' + (i+1)))}</span>
-            <a class="btn btn-ghost" href="${esc(f.src)}" download="${esc(f.name || ('proof-' + (i+1) + '.png'))}">${esc(T('pay.download'))}</a>
-          </div>
-        </div>`).join('')}</div>
-      <div class="art-modal-actions"><button class="btn btn-primary" id="pfClose">${esc(T('close'))}</button></div>
-    </div>`;
-    document.body.appendChild(ov);
-    const close = ()=> ov.remove();
-    ov.addEventListener('click', e=>{ if(e.target === ov) close(); });
-    ov.querySelector('#pfClose').addEventListener('click', close);
-  }
   function openBill(dataUrl){
     try{
       const m = /^data:([^;]+);base64,(.*)$/.exec(dataUrl);
@@ -5189,10 +3644,17 @@
     body.innerHTML = renderConfigShell(
       groupHtml('revenueTags',     T('set.revenueTags')) +
       groupHtml('orderStatuses',   T('set.orderStatuses')) +
-      groupHtml('invoiceStatuses', T('set.invoiceStatuses')) +
-      groupHtml('paymentModes',    T('set.paymentModes')) +
-      groupHtml('platforms',       T('set.platforms'), { fee:true }));
+      groupHtml('invoiceStatuses', T('set.invoiceStatuses')));
     wireGroups(body.querySelector('#artSetGroups'), body, rerender);
+  }
+  function renderAcctConfig(body){
+    const rerender = ()=> renderAcctConfig(body);
+    body.innerHTML = renderConfigShell(
+      groupHtml('expenseTags', T('set.expenseTags')) + broughtFromHtml() + prefixHtml());
+    const host = body.querySelector('#artSetGroups');
+    wireGroups(host, body, rerender);
+    wireBroughtFrom(host, body, rerender);
+    wirePrefix(host);
   }
 
   /* ---- Business Profile (issuer info for financial documents) ---- */
@@ -5223,7 +3685,6 @@
           <label class="art-bp-full">${esc(T('bp.addressEn'))}<textarea id="bpAddressEn" rows="2">${esc(b.addressEn||'')}</textarea></label>
           <label>${esc(T('bp.phone'))}<input type="text" id="bpPhone" value="${esc(b.phone||'')}"></label>
           <label>${esc(T('bp.taxId'))}<input type="text" id="bpTaxId" value="${esc(b.taxId||'')}"></label>
-          <label>${esc(T('bp.branch'))}<input type="text" id="bpBranch" value="${esc(b.branch != null ? b.branch : T('bp.branchDefault'))}"></label>
         </div>
         <div class="art-bp-imgs">
           ${imgField('logo', T('bp.logo'))}
@@ -5239,7 +3700,7 @@
   function wireBusinessProfile(host, body, rerender){
     const b = config.business;
     const bind = (id, key)=>{ const el = host.querySelector('#'+id); if(el) el.addEventListener('input', async ()=>{ b[key] = el.value; await saveConfig(); }); };
-    bind('bpName','name'); bind('bpNameEn','nameEn'); bind('bpAddress','address'); bind('bpAddressEn','addressEn'); bind('bpPhone','phone'); bind('bpTaxId','taxId'); bind('bpBranch','branch');
+    bind('bpName','name'); bind('bpNameEn','nameEn'); bind('bpAddress','address'); bind('bpAddressEn','addressEn'); bind('bpPhone','phone'); bind('bpTaxId','taxId');
     const vat = host.querySelector('#bpVat');
     if(vat) vat.addEventListener('click', async ()=>{
       b.vatDefault = !b.vatDefault;
@@ -5318,8 +3779,7 @@
     ord.addEventListener('change', async ()=>{ config.prefixes.order = clean(ord.value) || 'ATSC'; ord.value = config.prefixes.order; await saveConfig(); });
   }
 
-  function groupHtml(groupKey, label, opts){
-    const withFee = !!(opts && opts.fee);
+  function groupHtml(groupKey, label){
     const items = config[groupKey] || [];
     const rows = items.map(it=> `
       <div class="art-set-row" data-item="${it.id}">
@@ -5327,7 +3787,6 @@
         <input type="text" class="art-set-name" data-field="nameTh" value="${esc(it.nameTh||'')}" placeholder="${esc(it.name||T('set.nameTh'))}">
         <input type="text" class="art-set-name art-set-name-en" data-field="nameEn" value="${esc(it.nameEn||'')}" placeholder="${esc(it.name||T('set.nameEn'))}">
         ${it.locked ? `<span class="art-set-lock" title="${esc(T('set.lockedHint'))}">🔒</span>` : ''}
-        ${withFee ? `<span class="art-set-fee" title="${esc(T('set.feeHint'))}"><input type="number" class="art-set-feeinp" data-field="fee" value="${it.fee!=null?it.fee:0}" step="0.01" min="0">%</span>` : ''}
         <input type="color" class="art-set-color" data-field="color" value="${esc(it.color)}">
         ${it.locked ? `<span class="art-set-del-placeholder"></span>` : `<button type="button" class="acc-icon art-set-del" title="${esc(T('delete'))}">✕</button>`}
       </div>`).join('') || `<p class="art-set-empty">${esc(T('set.none'))}</p>`;
@@ -5337,17 +3796,7 @@
           <h4 class="diary-section-title">${esc(label)}</h4>
           <button type="button" class="btn btn-ghost art-set-add">${esc(T('set.add'))}</button>
         </div>
-        <div class="art-set-list">
-          ${items.length ? `<div class="art-set-headrow">
-            <span class="art-set-swatch" style="visibility:hidden;"></span>
-            <span class="art-set-h art-set-h-name">${esc(T('set.colTh'))}</span>
-            <span class="art-set-h art-set-h-name">${esc(T('set.colEn'))}</span>
-            ${withFee ? `<span class="art-set-h art-set-h-fee">${esc(T('set.colFee'))}</span>` : ''}
-            <span class="art-set-h art-set-h-color">${esc(T('set.colColor'))}</span>
-            <span class="art-set-h art-set-h-act"></span>
-          </div>` : ''}
-          ${rows}
-        </div>
+        <div class="art-set-list">${rows}</div>
       </div>`;
   }
 
@@ -5372,8 +3821,6 @@
         if(_th) _th.addEventListener('change', async (e)=>{ item.nameTh = e.target.value.trim(); await saveConfig(); });
         const _en = rowEl.querySelector('[data-field="nameEn"]');
         if(_en) _en.addEventListener('change', async (e)=>{ item.nameEn = e.target.value.trim(); await saveConfig(); });
-        const _fee = rowEl.querySelector('[data-field="fee"]');
-        if(_fee) _fee.addEventListener('change', async (e)=>{ item.fee = parseFloat(e.target.value) || 0; await saveConfig(); });
         rowEl.querySelector('[data-field="color"]').addEventListener('input', async (e)=>{
           item.color = e.target.value;
           rowEl.querySelector('.art-set-swatch').style.background = e.target.value;
@@ -5412,7 +3859,7 @@
       'sum.period': 'ช่วงเวลา', 'sum.allTime': 'ทั้งหมด', 'sum.tag': 'ป้ายกำกับ', 'sum.netTotal': 'ยอดสุทธิ', 'sum.percent': '% ของยอดรวม',
       'sum.sum': 'รวม', 'sum.totalNet': 'รวมรายจ่าย (สุทธิ)', 'sum.count': 'จำนวนรายการ', 'sum.avg': 'เฉลี่ยต่อรายการ', 'sum.byCategory':'\u0E15\u0E49\u0E19\u0E17\u0E38\u0E19\u0E15\u0E32\u0E21\u0E2B\u0E21\u0E27\u0E14\u0E2B\u0E21\u0E39\u0E48\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32', 'sum.byOrigin':'\u0E15\u0E49\u0E19\u0E17\u0E38\u0E19\u0E15\u0E32\u0E21\u0E41\u0E2B\u0E25\u0E48\u0E07\u0E17\u0E35\u0E48\u0E21\u0E32', 'sum.uncategorised':'\u0E44\u0E21\u0E48\u0E23\u0E30\u0E1A\u0E38\u0E2B\u0E21\u0E27\u0E14\u0E2B\u0E21\u0E39\u0E48', 'sum.noOrigin':'\u0E44\u0E21\u0E48\u0E23\u0E30\u0E1A\u0E38\u0E41\u0E2B\u0E25\u0E48\u0E07', 'sum.noData': 'ยังไม่มีข้อมูลในช่วงนี้',
       'rev.add': '+ เพิ่มออเดอร์', 'rev.addTitle': 'เพิ่มออเดอร์', 'rev.editTitle': 'แก้ไขออเดอร์',
-      'rev.invoiceNo': 'เลขบิล', 'col.lastEdited':'แก้ล่าสุด', 'rev.customer': 'ชื่อผู้รับ', 'rev.customerHint': 'ชื่อ-นามสกุลผู้รับ', 'rev.back':'กลับ', 'rev.mapHint':'หรือกดเลือกจังหวัดจากแผนที่', 'rev.selProvince':'จังหวัดที่เลือก', 'rev.noProvince':'ยังไม่ได้เลือกจังหวัด', 'region.north':'ภาคเหนือ', 'region.central':'ภาคกลาง', 'region.northeast':'ภาคตะวันออกเฉียงเหนือ', 'region.east':'ภาคตะวันออก', 'region.west':'ภาคตะวันตก', 'region.south':'ภาคใต้', 'rev.address': 'ที่อยู่ผู้รับ', 'rev.addressHint': 'ที่อยู่สำหรับจัดส่ง', 'rev.addrLine':'ที่อยู่ (บ้านเลขที่/หมู่/ซอย/ถนน)', 'rev.addrLineHint':'บ้านเลขที่ หมู่ ตรอก/ซอย ถนน', 'rev.province':'จังหวัด', 'rev.district':'อำเภอ/เขต', 'rev.subdistrict':'ตำบล/แขวง', 'rev.postal':'รหัสไปรษณีย์', 'rev.postalHint':'อัตโนมัติ', 'rev.loading':'กำลังโหลด...', 'rev.errAddrLine':'กรุณากรอกที่อยู่ (บ้านเลขที่/ซอย/ถนน)', 'rev.errAddrGeo':'กรุณาเลือกจังหวัด/อำเภอ/ตำบลให้ครบ', 'sec.seller':'\u0E1C\u0E39\u0E49\u0E2D\u0E2D\u0E01\u0E1A\u0E34\u0E25 (Seller)', 'sell.issuedBy':'\u0E2D\u0E2D\u0E01\u0E1A\u0E34\u0E25\u0E42\u0E14\u0E22', 'sell.signature':'\u0E25\u0E32\u0E22\u0E40\u0E0B\u0E47\u0E19', 'sell.clear':'\u0E25\u0E49\u0E32\u0E07', 'sell.upload':'\u0E2D\u0E31\u0E1B\u0E42\u0E2B\u0E25\u0E14\u0E23\u0E39\u0E1B\u0E25\u0E32\u0E22\u0E40\u0E0B\u0E47\u0E19', 'sell.signHint':'\u0E27\u0E32\u0E14\u0E43\u0E19\u0E01\u0E23\u0E2D\u0E1A \u0E2B\u0E23\u0E37\u0E2D\u0E2D\u0E31\u0E1B\u0E42\u0E2B\u0E25\u0E14\u0E23\u0E39\u0E1B (\u0E44\u0E21\u0E48\u0E40\u0E01\u0E34\u0E19 256KB)', 'sell.errSign':'\u0E01\u0E23\u0E38\u0E13\u0E32\u0E40\u0E0B\u0E47\u0E19\u0E0A\u0E37\u0E48\u0E2D\u0E01\u0E48\u0E2D\u0E19\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01', 'sell.seller':'\u0E1C\u0E39\u0E49\u0E2D\u0E2D\u0E01\u0E1A\u0E34\u0E25', 'rev.platformFee':'\u0E04\u0E48\u0E32\u0E18\u0E23\u0E23\u0E21\u0E40\u0E19\u0E35\u0E22\u0E21\u0E41\u0E1E\u0E25\u0E15\u0E1F\u0E2D\u0E23\u0E4C\u0E21', 'rev.platform': 'ขายผ่าน Platform', 'rev.platformHint': 'เช่น TikTok Shop', 'sec.delivery':'การจัดส่ง', 'sec.inventory':'รายการสินค้า (Inventory)', 'rev.phone':'เบอร์โทรติดต่อ', 'rev.phoneHint':'เบอร์โทรศัพท์ผู้รับ', 'rev.shippingTitle':'ค่าจัดส่ง', 'rev.shippingCost':'ค่าจัดส่ง', 'rev.shippingOverride':'ตั้งค่าส่งเอง (ทับ auto)', 'rev.shipAuto':'อัตโนมัติ', 'rev.shipNoCat':'ยังไม่มีสินค้า/หมวดหมู่', 'sec.vat':'\u0E01\u0E32\u0E23\u0E04\u0E33\u0E19\u0E27\u0E13 VAT', 'sec.payment':'\u0E01\u0E32\u0E23\u0E0A\u0E33\u0E23\u0E30\u0E40\u0E07\u0E34\u0E19', 'pay.mode':'\u0E27\u0E34\u0E18\u0E35\u0E0A\u0E33\u0E23\u0E30\u0E40\u0E07\u0E34\u0E19', 'pay.paid':'\u0E0A\u0E33\u0E23\u0E30\u0E41\u0E25\u0E49\u0E27 (\u0E21\u0E31\u0E14\u0E08\u0E33)', 'pay.vatable':'\u0E1A\u0E34\u0E25\u0E19\u0E35\u0E49\u0E04\u0E34\u0E14 VAT 7% (\u0E1A\u0E27\u0E01\u0E40\u0E1E\u0E34\u0E48\u0E21\u0E08\u0E32\u0E01\u0E22\u0E2D\u0E14\u0E2A\u0E38\u0E17\u0E18\u0E34)', 'pay.vat':'VAT', 'pay.vatSeparated':'\u0E41\u0E22\u0E01\u0E1A\u0E34\u0E25 (VAT 7%)', 'pay.vatYes':'VAT 7%', 'pay.noProof':'\u0E1A\u0E34\u0E25\u0E19\u0E35\u0E49\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49\u0E41\u0E19\u0E1A\u0E2B\u0E25\u0E31\u0E01\u0E10\u0E32\u0E19', 'pay.proof':'\u0E2B\u0E25\u0E31\u0E01\u0E10\u0E32\u0E19\u0E01\u0E32\u0E23\u0E0A\u0E33\u0E23\u0E30\u0E40\u0E07\u0E34\u0E19', 'pay.proofHint':'\u0E2A\u0E39\u0E07\u0E2A\u0E38\u0E14 5 \u0E44\u0E1F\u0E25\u0E4C (\u0E44\u0E21\u0E48\u0E40\u0E01\u0E34\u0E19 256KB \u0E15\u0E48\u0E2D\u0E44\u0E1F\u0E25\u0E4C)', 'pay.download':'\u0E14\u0E32\u0E27\u0E19\u0E4C\u0E42\u0E2B\u0E25\u0E14', 'pay.pending':'\u0E22\u0E2D\u0E14\u0E04\u0E49\u0E32\u0E07\u0E0A\u0E33\u0E23\u0E30', 'set.colTh':'\u0E0A\u0E37\u0E48\u0E2D\u0E20\u0E32\u0E29\u0E32\u0E44\u0E17\u0E22 (TH)', 'set.colEn':'\u0E0A\u0E37\u0E48\u0E2D\u0E20\u0E32\u0E29\u0E32\u0E2D\u0E31\u0E07\u0E01\u0E24\u0E29 (EN)', 'set.colFee':'\u0E04\u0E48\u0E32\u0E18\u0E23\u0E23\u0E21\u0E40\u0E19\u0E35\u0E22\u0E21 %', 'set.colColor':'\u0E2A\u0E35', 'set.expenseCategories':'\u0E2B\u0E21\u0E27\u0E14\u0E04\u0E48\u0E32\u0E43\u0E0A\u0E49\u0E08\u0E48\u0E32\u0E22 (Expense Category)', 'set.platforms':'\u0E0A\u0E48\u0E2D\u0E07\u0E17\u0E32\u0E07\u0E01\u0E32\u0E23\u0E02\u0E32\u0E22 (Platform)', 'set.feeHint':'\u0E04\u0E48\u0E32\u0E18\u0E23\u0E23\u0E21\u0E40\u0E19\u0E35\u0E22\u0E21\u0E41\u0E1E\u0E25\u0E15\u0E1F\u0E2D\u0E23\u0E4C\u0E21 (%)', 'set.paymentModes':'\u0E27\u0E34\u0E18\u0E35\u0E0A\u0E33\u0E23\u0E30\u0E40\u0E07\u0E34\u0E19', 'rev.discountsTitle':'ส่วนลด', 'rev.itemDiscount':'ส่วนลดสินค้า', 'rev.shippingDiscount':'ส่วนลดค่าส่ง', 'rev.overallDiscount':'ส่วนลดรวมทั้งบิล', 'rev.totalDiscount':'ส่วนลดรวม', 'rev.deliveryMethod':'วิธีจัดส่ง', 'rev.responsible':'ผู้รับผิดชอบ', 'rev.pickResp':'— เลือก —', 'rev.respHint':'ระบุผู้รับผิดชอบ', 'rev.proofLabel':'หลักฐานการจัดส่ง (Outsource)', 'rev.proofPick':'แนบไฟล์', 'rev.proofAttached':'แนบแล้ว', 'rev.proofNone':'ยังไม่ได้แนบ', 'rev.items': 'รายการสินค้า', 'del.allProvinces':'ทุกจังหวัด', 'del.allRegions':'ทุกภาค', 'del.allStatuses':'ทุกสถานะ', 'del.orderNo':'เลขที่ออเดอร์', 'del.recipient':'ผู้รับ', 'del.province':'จังหวัด', 'del.region':'ภาค', 'del.address':'ที่อยู่', 'del.status':'สถานะจัดส่ง', 'del.shipType':'วิธีจัดส่ง', 'del.responsible':'ผู้รับผิดชอบ', 'del.proof':'หลักฐาน', 'del.verified':'ยืนยัน', 'del.deliveryDate':'วันจัดส่ง', 'nav.productHistory':'ประวัติแก้ไข', 'nav.invoicing':'\u0E43\u0E1A\u0E41\u0E08\u0E49\u0E07\u0E2B\u0E19\u0E35\u0E49', 'nav.arStatus':'\u0E2A\u0E16\u0E32\u0E19\u0E30\u0E25\u0E39\u0E01\u0E2B\u0E19\u0E35\u0E49 (AR)', 'nav.receipts':'\u0E43\u0E1A\u0E40\u0E2A\u0E23\u0E47\u0E08', 'rc.avg':'\u0E40\u0E09\u0E25\u0E35\u0E48\u0E22\u0E15\u0E48\u0E2D\u0E43\u0E1A', 'inv.deposit':'\u0E21\u0E31\u0E14\u0E08\u0E33\u0E17\u0E35\u0E48\u0E23\u0E31\u0E1A\u0E21\u0E32\u0E41\u0E25\u0E49\u0E27', 'rc.count':'\u0E08\u0E33\u0E19\u0E27\u0E19\u0E43\u0E1A\u0E40\u0E2A\u0E23\u0E47\u0E08', 'rc.total':'\u0E22\u0E2D\u0E14\u0E23\u0E27\u0E21', 'rc.byMode':'\u0E41\u0E22\u0E01\u0E15\u0E32\u0E21\u0E0A\u0E48\u0E2D\u0E07\u0E17\u0E32\u0E07\u0E0A\u0E33\u0E23\u0E30', 'rc.receipts':'\u0E43\u0E1A\u0E40\u0E2A\u0E23\u0E47\u0E08', 'rc.empty':'\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E21\u0E35\u0E1A\u0E34\u0E25\u0E17\u0E35\u0E48\u0E0A\u0E33\u0E23\u0E30\u0E41\u0E25\u0E49\u0E27', 'se.delivery':'\u0E04\u0E48\u0E32\u0E2A\u0E48\u0E07\u0E08\u0E23\u0E34\u0E07', 'se.other':'\u0E04\u0E48\u0E32\u0E43\u0E0A\u0E49\u0E08\u0E48\u0E32\u0E22\u0E2D\u0E37\u0E48\u0E19', 'se.status':'\u0E2A\u0E16\u0E32\u0E19\u0E30', 'se.added':'\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E41\u0E25\u0E49\u0E27', 'se.none':'\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01', 'se.addNote':'\u0E40\u0E1E\u0E34\u0E48\u0E21\u0E42\u0E19\u0E49\u0E15', 'nav.sellingExpenses':'\u0E04\u0E48\u0E32\u0E43\u0E0A\u0E49\u0E08\u0E48\u0E32\u0E22\u0E43\u0E19\u0E01\u0E32\u0E23\u0E02\u0E32\u0E22', 'ap.mass':'\u0E15\u0E31\u0E49\u0E07\u0E08\u0E48\u0E32\u0E22\u0E04\u0E23\u0E1A\u0E17\u0E31\u0E49\u0E07\u0E2B\u0E21\u0E14', 'ap.massBody':'\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E17\u0E31\u0E49\u0E07 {n} \u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E17\u0E35\u0E48\u0E01\u0E23\u0E2D\u0E07\u0E2D\u0E22\u0E39\u0E48\u0E15\u0E2D\u0E19\u0E19\u0E35\u0E49 \u0E08\u0E30\u0E16\u0E39\u0E01\u0E15\u0E31\u0E49\u0E07\u0E40\u0E1B\u0E47\u0E19 \u0E08\u0E48\u0E32\u0E22\u0E04\u0E23\u0E1A + \u0E22\u0E37\u0E19\u0E22\u0E31\u0E19 \u0E41\u0E25\u0E30\u0E2B\u0E25\u0E31\u0E01\u0E10\u0E32\u0E19\u0E17\u0E35\u0E48\u0E41\u0E19\u0E1A\u0E08\u0E30\u0E16\u0E39\u0E01\u0E43\u0E2A\u0E48\u0E43\u0E2B\u0E49\u0E17\u0E38\u0E01\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23 \u00B7 \u0E22\u0E31\u0E07\u0E15\u0E49\u0E2D\u0E07\u0E01\u0E14 Save \u0E2D\u0E35\u0E01\u0E04\u0E23\u0E31\u0E49\u0E07\u0E08\u0E36\u0E07\u0E08\u0E30\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01', 'ap.paidAmount':'\u0E08\u0E48\u0E32\u0E22\u0E44\u0E1B\u0E41\u0E25\u0E49\u0E27', 'ap.mass':'\u0E15\u0E31\u0E49\u0E07\u0E08\u0E48\u0E32\u0E22\u0E04\u0E23\u0E1A\u0E17\u0E31\u0E49\u0E07\u0E2B\u0E21\u0E14', 'ap.massBody':'\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E17\u0E35\u0E48\u0E01\u0E23\u0E2D\u0E07\u0E44\u0E27\u0E49\u0E15\u0E2D\u0E19\u0E19\u0E35\u0E49 {n} \u0E23\u0E32\u0E22\u0E01\u0E32\u0E23 ({amt} \u0E3F) \u0E08\u0E30\u0E16\u0E39\u0E01\u0E15\u0E31\u0E49\u0E07\u0E40\u0E1B\u0E47\u0E19 \u0E08\u0E48\u0E32\u0E22\u0E04\u0E23\u0E1A \u0E41\u0E25\u0E30 \u0E22\u0E37\u0E19\u0E22\u0E31\u0E19\u0E41\u0E25\u0E49\u0E27 \u0E17\u0E31\u0E49\u0E07\u0E2B\u0E21\u0E14', 'ap.massProofHint':'\u0E44\u0E1F\u0E25\u0E4C\u0E17\u0E35\u0E48\u0E41\u0E19\u0E1A\u0E08\u0E30\u0E16\u0E39\u0E01\u0E43\u0E2A\u0E48\u0E43\u0E2B\u0E49\u0E17\u0E38\u0E01\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23 (\u0E44\u0E21\u0E48\u0E43\u0E2A\u0E48\u0E01\u0E47\u0E44\u0E14\u0E49)', 'ox.updatedBy':'\u0E2D\u0E31\u0E1B\u0E40\u0E14\u0E15\u0E42\u0E14\u0E22', 'nav.opexHistory':'\u0E1B\u0E23\u0E30\u0E27\u0E31\u0E15\u0E34\u0E41\u0E01\u0E49\u0E44\u0E02', 'nav.finOverview':'\u0E20\u0E32\u0E1E\u0E23\u0E27\u0E21', 'nav.pnl':'\u0E01\u0E33\u0E44\u0E23\u0E02\u0E32\u0E14\u0E17\u0E38\u0E19 (P&L)', 'nav.cashFlow':'\u0E01\u0E23\u0E30\u0E41\u0E2A\u0E40\u0E07\u0E34\u0E19\u0E2A\u0E14', 'nav.taxReport':'\u0E23\u0E32\u0E22\u0E07\u0E32\u0E19\u0E20\u0E32\u0E29\u0E35\u0E02\u0E32\u0E22', 'tax.modeVat':'\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E17\u0E35\u0E48\u0E04\u0E34\u0E14 VAT', 'tax.modeNoVat':'\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E17\u0E35\u0E48\u0E44\u0E21\u0E48\u0E04\u0E34\u0E14 VAT', 'tax.invoices':'\u0E43\u0E1A\u0E01\u0E33\u0E01\u0E31\u0E1A\u0E20\u0E32\u0E29\u0E35', 'tax.billsNoVat':'\u0E1A\u0E34\u0E25\u0E17\u0E35\u0E48\u0E44\u0E21\u0E48\u0E04\u0E34\u0E14 VAT', 'tax.base':'\u0E21\u0E39\u0E25\u0E04\u0E48\u0E32\u0E01\u0E48\u0E2D\u0E19 VAT', 'tax.output':'\u0E20\u0E32\u0E29\u0E35\u0E02\u0E32\u0E22 (VAT 7%)', 'tax.grand':'\u0E23\u0E27\u0E21\u0E17\u0E31\u0E49\u0E07\u0E2A\u0E34\u0E49\u0E19', 'tax.byMonth':'\u0E2A\u0E23\u0E38\u0E1B\u0E23\u0E32\u0E22\u0E40\u0E14\u0E37\u0E2D\u0E19 (\u0E2A\u0E33\u0E2B\u0E23\u0E31\u0E1A\u0E22\u0E37\u0E48\u0E19)', 'tax.detail':'\u0E23\u0E32\u0E22\u0E25\u0E30\u0E40\u0E2D\u0E35\u0E22\u0E14\u0E43\u0E1A\u0E01\u0E33\u0E01\u0E31\u0E1A\u0E20\u0E32\u0E29\u0E35', 'tax.detailNoVat':'\u0E1A\u0E34\u0E25\u0E17\u0E35\u0E48\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49\u0E2D\u0E22\u0E39\u0E48\u0E43\u0E19\u0E23\u0E32\u0E22\u0E07\u0E32\u0E19', 'tax.issuer':'\u0E1C\u0E39\u0E49\u0E2D\u0E2D\u0E01\u0E43\u0E1A\u0E01\u0E33\u0E01\u0E31\u0E1A', 'tax.empty':'\u0E44\u0E21\u0E48\u0E21\u0E35\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E43\u0E19\u0E0A\u0E48\u0E27\u0E07\u0E19\u0E35\u0E49', 'tax.hint':'\u0E14\u0E36\u0E07\u0E40\u0E09\u0E1E\u0E32\u0E30\u0E1A\u0E34\u0E25\u0E17\u0E35\u0E48\u0E15\u0E34\u0E4A\u0E01 VAT \u0E44\u0E27\u0E49 \u00B7 \u0E1A\u0E34\u0E25\u0E17\u0E35\u0E48\u0E41\u0E22\u0E01\u0E04\u0E48\u0E32\u0E2A\u0E48\u0E07 \u0E04\u0E48\u0E32\u0E2A\u0E48\u0E07\u0E44\u0E21\u0E48\u0E2D\u0E22\u0E39\u0E48\u0E43\u0E19\u0E10\u0E32\u0E19\u0E20\u0E32\u0E29\u0E35 \u00B7 \u0E23\u0E32\u0E22\u0E07\u0E32\u0E19\u0E19\u0E35\u0E49\u0E40\u0E1B\u0E47\u0E19\u0E20\u0E32\u0E29\u0E35\u0E02\u0E32\u0E22\u0E2D\u0E22\u0E48\u0E32\u0E07\u0E40\u0E14\u0E35\u0E22\u0E27 \u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49\u0E2B\u0E31\u0E01\u0E20\u0E32\u0E29\u0E35\u0E0B\u0E37\u0E49\u0E2D', 'tax.hintNoVat':'\u0E1A\u0E34\u0E25\u0E40\u0E2B\u0E25\u0E48\u0E32\u0E19\u0E35\u0E49\u0E44\u0E21\u0E48\u0E16\u0E39\u0E01\u0E19\u0E31\u0E1A\u0E43\u0E19\u0E23\u0E32\u0E22\u0E07\u0E32\u0E19\u0E20\u0E32\u0E29\u0E35\u0E02\u0E32\u0E22 \u2014 \u0E14\u0E39\u0E44\u0E27\u0E49\u0E40\u0E1C\u0E37\u0E48\u0E2D\u0E15\u0E23\u0E27\u0E08\u0E27\u0E48\u0E32\u0E25\u0E37\u0E21\u0E15\u0E34\u0E4A\u0E01 VAT \u0E2B\u0E23\u0E37\u0E2D\u0E44\u0E21\u0E48', 'cd.noteTitle':'\u0E2B\u0E21\u0E32\u0E22\u0E40\u0E2B\u0E15\u0E38\u0E1A\u0E19\u0E40\u0E2D\u0E01\u0E2A\u0E32\u0E23', 'cd.noteHint':'\u0E02\u0E49\u0E2D\u0E04\u0E27\u0E32\u0E21\u0E19\u0E35\u0E49\u0E40\u0E1B\u0E47\u0E19 \u0E04\u0E48\u0E32\u0E15\u0E31\u0E49\u0E07\u0E15\u0E49\u0E19 \u0E17\u0E35\u0E48\u0E08\u0E30\u0E16\u0E39\u0E01\u0E40\u0E15\u0E34\u0E21\u0E43\u0E2B\u0E49\u0E2D\u0E31\u0E15\u0E42\u0E19\u0E21\u0E31\u0E15\u0E34\u0E43\u0E19\u0E0A\u0E48\u0E2D\u0E07 \u0E2B\u0E21\u0E32\u0E22\u0E40\u0E2B\u0E15\u0E38 \u0E15\u0E2D\u0E19\u0E2A\u0E23\u0E49\u0E32\u0E1A\u0E34\u0E25\u0E43\u0E2B\u0E21\u0E48 \u2014 \u0E41\u0E01\u0E49\u0E23\u0E32\u0E22\u0E1A\u0E34\u0E25\u0E44\u0E14\u0E49 \u0E41\u0E25\u0E30\u0E40\u0E2D\u0E01\u0E2A\u0E32\u0E23\u0E08\u0E30\u0E1E\u0E34\u0E21\u0E1E\u0E4C\u0E15\u0E32\u0E21\u0E17\u0E35\u0E48\u0E23\u0E30\u0E1A\u0E38\u0E43\u0E19\u0E1A\u0E34\u0E25\u0E19\u0E31\u0E49\u0E19', 'cd.notePh':'\u0E40\u0E0A\u0E48\u0E19 \u0E40\u0E07\u0E37\u0E48\u0E2D\u0E19\u0E44\u0E02\u0E01\u0E32\u0E23\u0E23\u0E31\u0E1A\u0E1B\u0E23\u0E30\u0E01\u0E31\u0E19 \u0E27\u0E34\u0E18\u0E35\u0E14\u0E39\u0E41\u0E25\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32 \u0E0A\u0E48\u0E2D\u0E07\u0E17\u0E32\u0E07\u0E15\u0E34\u0E14\u0E15\u0E48\u0E2D', 'cd.saved':'\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E41\u0E25\u0E49\u0E27', 'cd.previewTitle':'\u0E15\u0E31\u0E27\u0E2D\u0E22\u0E48\u0E32\u0E07\u0E17\u0E35\u0E48\u0E08\u0E30\u0E41\u0E2A\u0E14\u0E07', 'cd.previewHint':'\u0E02\u0E49\u0E2D\u0E04\u0E27\u0E32\u0E21\u0E19\u0E35\u0E49\u0E08\u0E30\u0E27\u0E32\u0E07\u0E40\u0E2B\u0E19\u0E37\u0E2D\u0E0A\u0E48\u0E2D\u0E07\u0E25\u0E32\u0E22\u0E40\u0E0B\u0E47\u0E19\u0E43\u0E19\u0E40\u0E2D\u0E01\u0E2A\u0E32\u0E23', 'cd.previewEmpty':'\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49\u0E43\u0E2A\u0E48\u0E2B\u0E21\u0E32\u0E22\u0E40\u0E2B\u0E15\u0E38', 'rev.remarkHint':'\u0E1E\u0E34\u0E21\u0E1E\u0E4C\u0E1A\u0E19\u0E40\u0E2D\u0E01\u0E2A\u0E32\u0E23 \u00B7 \u0E40\u0E23\u0E34\u0E48\u0E21\u0E08\u0E32\u0E01\u0E04\u0E48\u0E32\u0E15\u0E31\u0E49\u0E07\u0E15\u0E49\u0E19\u0E43\u0E19\u0E2B\u0E19\u0E49\u0E32\u0E40\u0E2D\u0E01\u0E2A\u0E32\u0E23\u0E25\u0E39\u0E01\u0E04\u0E49\u0E32 \u0E41\u0E01\u0E49\u0E44\u0E14\u0E49\u0E15\u0E48\u0E32\u0E07\u0E2B\u0E32\u0E01\u0E1A\u0E34\u0E25', 'rev.noteHint':'\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E20\u0E32\u0E22\u0E43\u0E19 \u0E44\u0E21\u0E48\u0E02\u0E36\u0E49\u0E19\u0E1A\u0E19\u0E40\u0E2D\u0E01\u0E2A\u0E32\u0E23', 'noAccess':'\u0E1A\u0E17\u0E1A\u0E32\u0E17\u0E19\u0E35\u0E49\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49\u0E23\u0E31\u0E1A\u0E2A\u0E34\u0E17\u0E18\u0E34\u0E4C\u0E40\u0E02\u0E49\u0E32\u0E16\u0E36\u0E07\u0E2B\u0E19\u0E49\u0E32\u0E19\u0E35\u0E49', 'cd.remark':'\u0E2B\u0E21\u0E32\u0E22\u0E40\u0E2B\u0E15\u0E38', 'fin.allTime':'\u0E17\u0E31\u0E49\u0E07\u0E2B\u0E21\u0E14', 'fin.custom':'\u0E01\u0E33\u0E2B\u0E19\u0E14\u0E40\u0E2D\u0E07', 'fin.thisMonth':'\u0E40\u0E14\u0E37\u0E2D\u0E19\u0E19\u0E35\u0E49', 'fin.netProfit':'\u0E01\u0E33\u0E44\u0E23\u0E2A\u0E38\u0E17\u0E18\u0E34', 'fin.cashIn':'\u0E40\u0E07\u0E34\u0E19\u0E40\u0E02\u0E49\u0E32\u0E08\u0E23\u0E34\u0E07', 'fin.cashOut':'\u0E40\u0E07\u0E34\u0E19\u0E2D\u0E2D\u0E01\u0E08\u0E23\u0E34\u0E07', 'fin.cashNet':'\u0E40\u0E07\u0E34\u0E19\u0E2A\u0E14\u0E2A\u0E38\u0E17\u0E18\u0E34', 'fin.ar':'\u0E25\u0E39\u0E01\u0E04\u0E49\u0E32\u0E04\u0E49\u0E32\u0E07\u0E08\u0E48\u0E32\u0E22', 'fin.ap':'\u0E2B\u0E19\u0E35\u0E49\u0E04\u0E49\u0E32\u0E07\u0E08\u0E48\u0E32\u0E22', 'fin.revByPlatform':'\u0E23\u0E32\u0E22\u0E44\u0E14\u0E49\u0E15\u0E32\u0E21\u0E0A\u0E48\u0E2D\u0E07\u0E17\u0E32\u0E07', 'fin.revShort':'\u0E23\u0E32\u0E22\u0E44\u0E14\u0E49', 'fin.costMix':'\u0E42\u0E04\u0E23\u0E07\u0E2A\u0E23\u0E49\u0E32\u0E07\u0E15\u0E49\u0E19\u0E17\u0E38\u0E19', 'fin.health':'\u0E2A\u0E38\u0E02\u0E20\u0E32\u0E1E\u0E17\u0E32\u0E07\u0E01\u0E32\u0E23\u0E40\u0E07\u0E34\u0E19', 'fin.healthHint':'\u0E15\u0E31\u0E27\u0E40\u0E25\u0E02\u0E17\u0E35\u0E48\u0E04\u0E27\u0E23\u0E44\u0E25\u0E48\u0E15\u0E32\u0E21\u0E2D\u0E22\u0E39\u0E48\u0E40\u0E2A\u0E21\u0E2D (\u0E44\u0E21\u0E48\u0E02\u0E36\u0E49\u0E19\u0E01\u0E31\u0E1A\u0E0A\u0E48\u0E27\u0E07\u0E27\u0E31\u0E19\u0E17\u0E35\u0E48\u0E40\u0E25\u0E37\u0E2D\u0E01)', 'fin.item':'\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23', 'fin.count':'\u0E08\u0E33\u0E19\u0E27\u0E19', 'fin.note':'\u0E2B\u0E21\u0E32\u0E22\u0E40\u0E2B\u0E15\u0E38', 'fin.hAr':'\u0E1A\u0E34\u0E25\u0E17\u0E35\u0E48\u0E22\u0E31\u0E07\u0E40\u0E01\u0E47\u0E1A\u0E40\u0E07\u0E34\u0E19\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49', 'fin.hArNote':'\u0E15\u0E32\u0E21\u0E40\u0E01\u0E47\u0E1A\u0E17\u0E35\u0E48\u0E2B\u0E19\u0E49\u0E32\u0E43\u0E1A\u0E41\u0E08\u0E49\u0E07\u0E2B\u0E19\u0E35\u0E49', 'fin.hAp':'\u0E2B\u0E19\u0E35\u0E49\u0E04\u0E48\u0E32\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32\u0E17\u0E35\u0E48\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E08\u0E48\u0E32\u0E22', 'fin.hApNote':'\u0E08\u0E31\u0E14\u0E01\u0E32\u0E23\u0E17\u0E35\u0E48\u0E2B\u0E19\u0E49\u0E32 AP', 'fin.hStock':'\u0E21\u0E39\u0E25\u0E04\u0E48\u0E32\u0E2A\u0E15\u0E4A\u0E2D\u0E01\u0E04\u0E07\u0E40\u0E2B\u0E25\u0E37\u0E2D', 'fin.hStockNote':'\u0E40\u0E07\u0E34\u0E19\u0E17\u0E35\u0E48\u0E08\u0E21\u0E2D\u0E22\u0E39\u0E48\u0E01\u0E31\u0E1A\u0E02\u0E2D\u0E07', 'fin.hLoss':'\u0E1A\u0E34\u0E25\u0E17\u0E35\u0E48\u0E02\u0E32\u0E14\u0E17\u0E38\u0E19', 'fin.hLossNote':'\u0E14\u0E39\u0E23\u0E32\u0E22\u0E25\u0E30\u0E40\u0E2D\u0E35\u0E22\u0E14\u0E17\u0E35\u0E48\u0E2B\u0E19\u0E49\u0E32\u0E15\u0E49\u0E19\u0E17\u0E38\u0E19\u0E02\u0E32\u0E22', 'fin.hVat':'VAT \u0E17\u0E35\u0E48\u0E40\u0E01\u0E47\u0E1A\u0E08\u0E32\u0E01\u0E25\u0E39\u0E01\u0E04\u0E49\u0E32', 'fin.hVatNote':'\u0E44\u0E21\u0E48\u0E43\u0E0A\u0E48\u0E23\u0E32\u0E22\u0E44\u0E14\u0E49\u0E02\u0E2D\u0E07\u0E23\u0E49\u0E32\u0E19', 'fin.statement':'\u0E07\u0E1A\u0E01\u0E33\u0E44\u0E23\u0E02\u0E32\u0E14\u0E17\u0E38\u0E19', 'fin.ofRevenue':'% \u0E02\u0E2D\u0E07\u0E23\u0E32\u0E22\u0E44\u0E14\u0E49', 'fin.revenue':'\u0E23\u0E32\u0E22\u0E44\u0E14\u0E49\u0E08\u0E32\u0E01\u0E01\u0E32\u0E23\u0E02\u0E32\u0E22', 'fin.sellingExp':'\u0E04\u0E48\u0E32\u0E43\u0E0A\u0E49\u0E08\u0E48\u0E32\u0E22\u0E43\u0E19\u0E01\u0E32\u0E23\u0E02\u0E32\u0E22', 'fin.afterSelling':'\u0E01\u0E33\u0E44\u0E23\u0E2B\u0E25\u0E31\u0E07\u0E2B\u0E31\u0E01\u0E04\u0E48\u0E32\u0E01\u0E32\u0E23\u0E02\u0E32\u0E22', 'fin.noOpex':'\u0E44\u0E21\u0E48\u0E21\u0E35\u0E04\u0E48\u0E32\u0E43\u0E0A\u0E49\u0E08\u0E48\u0E32\u0E22\u0E14\u0E33\u0E40\u0E19\u0E34\u0E19\u0E07\u0E32\u0E19\u0E43\u0E19\u0E0A\u0E48\u0E27\u0E07\u0E19\u0E35\u0E49', 'fin.revTrend':'\u0E23\u0E32\u0E22\u0E44\u0E14\u0E49\u0E22\u0E49\u0E2D\u0E19\u0E2B\u0E25\u0E31\u0E07 6 \u0E40\u0E14\u0E37\u0E2D\u0E19', 'fin.netTrend':'\u0E01\u0E33\u0E44\u0E23\u0E2A\u0E38\u0E17\u0E18\u0E34\u0E22\u0E49\u0E2D\u0E19\u0E2B\u0E25\u0E31\u0E07 6 \u0E40\u0E14\u0E37\u0E2D\u0E19', 'fin.trendHint':'\u0E16\u0E49\u0E32\u0E23\u0E32\u0E22\u0E44\u0E14\u0E49\u0E42\u0E15\u0E41\u0E15\u0E48\u0E01\u0E33\u0E44\u0E23\u0E44\u0E21\u0E48\u0E42\u0E15 \u0E41\u0E1B\u0E25\u0E27\u0E48\u0E32\u0E15\u0E49\u0E19\u0E17\u0E38\u0E19\u0E01\u0E33\u0E25\u0E31\u0E07\u0E01\u0E34\u0E19\u0E01\u0E33\u0E44\u0E23', 'fin.byMonth':'\u0E2A\u0E23\u0E38\u0E1B\u0E23\u0E32\u0E22\u0E40\u0E14\u0E37\u0E2D\u0E19', 'fin.month':'\u0E40\u0E14\u0E37\u0E2D\u0E19', 'fin.movement':'\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23', 'fin.party':'\u0E04\u0E39\u0E48\u0E04\u0E49\u0E32', 'fin.in':'\u0E40\u0E07\u0E34\u0E19\u0E40\u0E02\u0E49\u0E32', 'fin.out':'\u0E40\u0E07\u0E34\u0E19\u0E2D\u0E2D\u0E01', 'fin.mCustomer':'\u0E23\u0E31\u0E1A\u0E08\u0E32\u0E01\u0E25\u0E39\u0E01\u0E04\u0E49\u0E32', 'fin.mSupplier':'\u0E08\u0E48\u0E32\u0E22\u0E04\u0E48\u0E32\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32', 'fin.noMoves':'\u0E44\u0E21\u0E48\u0E21\u0E35\u0E01\u0E32\u0E23\u0E40\u0E04\u0E25\u0E37\u0E48\u0E2D\u0E19\u0E44\u0E2B\u0E27\u0E02\u0E2D\u0E07\u0E40\u0E07\u0E34\u0E19', 'fin.inTrend':'\u0E40\u0E07\u0E34\u0E19\u0E40\u0E02\u0E49\u0E32\u0E23\u0E32\u0E22\u0E40\u0E14\u0E37\u0E2D\u0E19', 'fin.outTrend':'\u0E40\u0E07\u0E34\u0E19\u0E2D\u0E2D\u0E01\u0E23\u0E32\u0E22\u0E40\u0E14\u0E37\u0E2D\u0E19', 'fin.cashHint':'\u0E40\u0E07\u0E34\u0E19\u0E2A\u0E14\u0E15\u0E48\u0E32\u0E07\u0E08\u0E32\u0E01\u0E01\u0E33\u0E44\u0E23 \u2014 \u0E02\u0E32\u0E22\u0E44\u0E14\u0E49\u0E41\u0E15\u0E48\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49\u0E40\u0E01\u0E47\u0E1A\u0E40\u0E07\u0E34\u0E19 \u0E01\u0E47\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E40\u0E02\u0E49\u0E32\u0E01\u0E23\u0E30\u0E40\u0E1B\u0E4B\u0E32', 'fin.vsProfit':'\u0E15\u0E48\u0E32\u0E07\u0E08\u0E32\u0E01\u0E01\u0E33\u0E44\u0E23', 'ox.category':'\u0E2B\u0E21\u0E27\u0E14', 'ox.details':'\u0E23\u0E32\u0E22\u0E25\u0E30\u0E40\u0E2D\u0E35\u0E22\u0E14', 'ox.amount':'\u0E08\u0E33\u0E19\u0E27\u0E19\u0E40\u0E07\u0E34\u0E19', 'ox.receipt':'\u0E43\u0E1A\u0E40\u0E2A\u0E23\u0E47\u0E08/\u0E2B\u0E25\u0E31\u0E01\u0E10\u0E32\u0E19', 'ox.add':'+ \u0E40\u0E1E\u0E34\u0E48\u0E21\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23', 'ox.addTitle':'\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E23\u0E32\u0E22\u0E08\u0E48\u0E32\u0E22\u0E43\u0E2B\u0E21\u0E48', 'ox.addHint':'\u0E01\u0E23\u0E2D\u0E01\u0E41\u0E25\u0E49\u0E27\u0E01\u0E14 Enter \u0E01\u0E47\u0E44\u0E14\u0E49 \u00B7 \u0E41\u0E01\u0E49\u0E43\u0E19\u0E15\u0E32\u0E23\u0E32\u0E07\u0E44\u0E14\u0E49\u0E40\u0E25\u0E22 \u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E17\u0E31\u0E19\u0E17\u0E35', 'ox.descPh':'\u0E08\u0E48\u0E32\u0E22\u0E04\u0E48\u0E32\u0E2D\u0E30\u0E44\u0E23', 'ox.count':'\u0E08\u0E33\u0E19\u0E27\u0E19\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23', 'ox.total':'\u0E23\u0E27\u0E21\u0E23\u0E32\u0E22\u0E08\u0E48\u0E32\u0E22', 'ox.avg':'\u0E40\u0E09\u0E25\u0E35\u0E48\u0E22\u0E15\u0E48\u0E2D\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23', 'ox.biggest':'\u0E2B\u0E21\u0E27\u0E14\u0E17\u0E35\u0E48\u0E08\u0E48\u0E32\u0E22\u0E21\u0E32\u0E01\u0E2A\u0E38\u0E14', 'ox.byCat':'\u0E23\u0E32\u0E22\u0E08\u0E48\u0E32\u0E22\u0E15\u0E32\u0E21\u0E2B\u0E21\u0E27\u0E14', 'ox.short':'\u0E23\u0E32\u0E22\u0E08\u0E48\u0E32\u0E22', 'ox.empty':'\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E21\u0E35\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23', 'ox.errAmount':'\u0E01\u0E23\u0E38\u0E13\u0E32\u0E43\u0E2A\u0E48\u0E08\u0E33\u0E19\u0E27\u0E19\u0E40\u0E07\u0E34\u0E19', 'ox.delConfirm':'\u0E25\u0E1A\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E19\u0E35\u0E49?', 'ap.status':'\u0E2A\u0E16\u0E32\u0E19\u0E30\u0E2B\u0E19\u0E35\u0E49', 'ap.unpaid':'\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E08\u0E48\u0E32\u0E22', 'ap.partial':'\u0E08\u0E48\u0E32\u0E22\u0E1A\u0E32\u0E07\u0E2A\u0E48\u0E27\u0E19', 'ap.paid':'\u0E08\u0E48\u0E32\u0E22\u0E04\u0E23\u0E1A', 'ap.proof':'\u0E2B\u0E25\u0E31\u0E01\u0E10\u0E32\u0E19\u0E01\u0E32\u0E23\u0E0A\u0E33\u0E23\u0E30\u0E2B\u0E19\u0E35\u0E49', 'ap.amount':'\u0E22\u0E2D\u0E14\u0E23\u0E27\u0E21', 'ap.entries':'\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E23\u0E31\u0E1A\u0E40\u0E02\u0E49\u0E32', 'ap.total':'\u0E21\u0E39\u0E25\u0E04\u0E48\u0E32\u0E23\u0E27\u0E21', 'ap.owed':'\u0E22\u0E2D\u0E14\u0E04\u0E49\u0E32\u0E07\u0E08\u0E48\u0E32\u0E22', 'ap.settled':'\u0E08\u0E48\u0E32\u0E22\u0E41\u0E25\u0E49\u0E27', 'ap.empty':'\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E21\u0E35\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E40\u0E15\u0E34\u0E21\u0E2A\u0E15\u0E4A\u0E2D\u0E01', 'ap.clickHint':'\u0E04\u0E25\u0E34\u0E01\u0E40\u0E1E\u0E37\u0E48\u0E2D\u0E40\u0E1B\u0E25\u0E35\u0E48\u0E22\u0E19\u0E2A\u0E16\u0E32\u0E19\u0E30', 'ap.unsaved':'\u0E21\u0E35\u0E01\u0E32\u0E23\u0E41\u0E01\u0E49\u0E44\u0E02\u0E17\u0E35\u0E48\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01', 'ap.confirmTitle':'\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01\u0E01\u0E32\u0E23\u0E40\u0E1B\u0E25\u0E35\u0E48\u0E22\u0E19\u0E41\u0E1B\u0E25\u0E07', 'ap.confirmBody':'\u0E22\u0E37\u0E19\u0E22\u0E31\u0E19\u0E1A\u0E31\u0E19\u0E17\u0E36\u0E01 {n} \u0E23\u0E32\u0E22\u0E01\u0E32\u0E23?', 'confirm':'\u0E22\u0E37\u0E19\u0E22\u0E31\u0E19', 'nav.apList':'\u0E40\u0E08\u0E49\u0E32\u0E2B\u0E19\u0E35\u0E49 (AP)', 'nav.opExpense':'\u0E04\u0E48\u0E32\u0E43\u0E0A\u0E49\u0E08\u0E48\u0E32\u0E22\u0E14\u0E33\u0E40\u0E19\u0E34\u0E19\u0E07\u0E32\u0E19', 'nav.cogsTracking':'\u0E15\u0E34\u0E14\u0E15\u0E32\u0E21\u0E15\u0E49\u0E19\u0E17\u0E38\u0E19\u0E02\u0E32\u0E22', 'sv.skus':'\u0E08\u0E33\u0E19\u0E27\u0E19\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32', 'sv.units':'\u0E08\u0E33\u0E19\u0E27\u0E19\u0E0A\u0E34\u0E49\u0E19\u0E04\u0E07\u0E40\u0E2B\u0E25\u0E37\u0E2D', 'sv.atCost':'\u0E21\u0E39\u0E25\u0E04\u0E48\u0E32\u0E15\u0E32\u0E21\u0E15\u0E49\u0E19\u0E17\u0E38\u0E19', 'sv.atRetail':'\u0E21\u0E39\u0E25\u0E04\u0E48\u0E32\u0E15\u0E32\u0E21\u0E23\u0E32\u0E04\u0E32\u0E02\u0E32\u0E22', 'sv.potential':'\u0E01\u0E33\u0E44\u0E23\u0E17\u0E35\u0E48\u0E04\u0E32\u0E14\u0E27\u0E48\u0E32\u0E08\u0E30\u0E44\u0E14\u0E49', 'sv.margin':'\u0E2D\u0E31\u0E15\u0E23\u0E32\u0E01\u0E33\u0E44\u0E23', 'sv.byCat':'\u0E21\u0E39\u0E25\u0E04\u0E48\u0E32\u0E15\u0E32\u0E21\u0E2B\u0E21\u0E27\u0E14\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32', 'sv.byOrigin':'\u0E21\u0E39\u0E25\u0E04\u0E48\u0E32\u0E15\u0E32\u0E21\u0E41\u0E2B\u0E25\u0E48\u0E07\u0E17\u0E35\u0E48\u0E21\u0E32', 'sv.top':'\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32\u0E17\u0E35\u0E48\u0E08\u0E21\u0E17\u0E38\u0E19\u0E21\u0E32\u0E01\u0E17\u0E35\u0E48\u0E2A\u0E38\u0E14', 'sv.topHint':'\u0E40\u0E07\u0E34\u0E19\u0E01\u0E49\u0E2D\u0E19\u0E2D\u0E22\u0E39\u0E48\u0E17\u0E35\u0E48\u0E02\u0E2D\u0E07\u0E40\u0E2B\u0E25\u0E48\u0E32\u0E19\u0E35\u0E49\u0E21\u0E32\u0E01\u0E17\u0E35\u0E48\u0E2A\u0E38\u0E14 (5 \u0E2D\u0E31\u0E19\u0E14\u0E31\u0E1A\u0E41\u0E23\u0E01)', 'sv.onHand':'\u0E04\u0E07\u0E40\u0E2B\u0E25\u0E37\u0E2D', 'sv.avgCost':'\u0E15\u0E49\u0E19\u0E17\u0E38\u0E19/\u0E0A\u0E34\u0E49\u0E19', 'sv.empty':'\u0E44\u0E21\u0E48\u0E21\u0E35\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32\u0E04\u0E07\u0E40\u0E2B\u0E25\u0E37\u0E2D', 'nav.stockValue':'\u0E21\u0E39\u0E25\u0E04\u0E48\u0E32\u0E2A\u0E15\u0E4A\u0E2D\u0E01', 'cogs.pfee':'\u0E04\u0E48\u0E32\u0E18\u0E23\u0E23\u0E21\u0E40\u0E19\u0E35\u0E22\u0E21\u0E41\u0E1E\u0E25\u0E15\u0E1F\u0E2D\u0E23\u0E4C\u0E21', 'cogs.dfee':'\u0E04\u0E48\u0E32\u0E08\u0E31\u0E14\u0E2A\u0E48\u0E07\u0E08\u0E23\u0E34\u0E07', 'cogs.commission':'\u0E04\u0E48\u0E32\u0E04\u0E2D\u0E21', 'cogs.netProfit':'\u0E01\u0E33\u0E44\u0E23\u0E2B\u0E25\u0E31\u0E07\u0E2B\u0E31\u0E01\u0E04\u0E48\u0E32\u0E43\u0E0A\u0E49\u0E08\u0E48\u0E32\u0E22', 'comm.payout':'\u0E23\u0E39\u0E1B\u0E41\u0E1A\u0E1A\u0E01\u0E32\u0E23\u0E08\u0E48\u0E32\u0E22', 'comm.pool':'\u0E23\u0E27\u0E21\u0E41\u0E25\u0E49\u0E27\u0E2B\u0E32\u0E23\u0E40\u0E17\u0E48\u0E32\u0E01\u0E31\u0E19', 'comm.person':'\u0E41\u0E22\u0E01\u0E23\u0E32\u0E22\u0E1A\u0E38\u0E04\u0E04\u0E25', 'comm.payoutHint':'\u0E1C\u0E39\u0E01\u0E01\u0E31\u0E1A\u0E1E\u0E19\u0E31\u0E01\u0E07\u0E32\u0E19\u0E1B\u0E23\u0E30\u0E40\u0E20\u0E17 Salesperson', 'comm.sellerCount':'\u0E1E\u0E19\u0E31\u0E01\u0E07\u0E32\u0E19\u0E02\u0E32\u0E22\u0E02\u0E13\u0E30\u0E19\u0E35\u0E49', 'comm.base':'\u0E10\u0E32\u0E19\u0E01\u0E32\u0E23\u0E04\u0E33\u0E19\u0E27\u0E13', 'comm.baseGoods':'\u0E40\u0E09\u0E1E\u0E32\u0E30\u0E23\u0E32\u0E04\u0E32\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32', 'comm.baseGoodsShip':'\u0E23\u0E27\u0E21\u0E04\u0E48\u0E32\u0E2A\u0E48\u0E07', 'comm.rates':'\u0E2D\u0E31\u0E15\u0E23\u0E32\u0E15\u0E32\u0E21\u0E2B\u0E21\u0E27\u0E14\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32', 'comm.profitBase':'\u0E04\u0E33\u0E19\u0E27\u0E13\u0E08\u0E32\u0E01 \u0E01\u0E33\u0E44\u0E23 (\u0E22\u0E2D\u0E14\u0E02\u0E32\u0E22 \u2212 \u0E15\u0E49\u0E19\u0E17\u0E38\u0E19 \u2212 \u0E2A\u0E48\u0E27\u0E19\u0E25\u0E14 \u2212 \u0E04\u0E48\u0E32\u0E18\u0E23\u0E23\u0E21\u0E40\u0E19\u0E35\u0E22\u0E21) \u0E44\u0E21\u0E48\u0E43\u0E0A\u0E48\u0E22\u0E2D\u0E14\u0E02\u0E32\u0E22 \u00B7 \u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E17\u0E35\u0E48\u0E02\u0E32\u0E14\u0E17\u0E38\u0E19\u0E44\u0E21\u0E48\u0E04\u0E34\u0E14\u0E04\u0E48\u0E32\u0E04\u0E2D\u0E21', 'comm.ratesHint':'\u0E04\u0E48\u0E32\u0E40\u0E23\u0E34\u0E48\u0E21\u0E15\u0E49\u0E19 5% \u0E17\u0E38\u0E01\u0E2B\u0E21\u0E27\u0E14', 'comm.noCats':'\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E21\u0E35\u0E2B\u0E21\u0E27\u0E14\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32', 'cogs.top':'\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32\u0E17\u0E33\u0E01\u0E33\u0E44\u0E23\u0E2A\u0E39\u0E07\u0E2A\u0E38\u0E14 10 \u0E2D\u0E31\u0E19\u0E14\u0E31\u0E1A', 'cogs.topHint':'\u0E01\u0E33\u0E44\u0E23\u0E02\u0E31\u0E49\u0E19\u0E15\u0E49\u0E19\u0E15\u0E48\u0E2D\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32 (\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E2B\u0E31\u0E01\u0E04\u0E48\u0E32\u0E18\u0E23\u0E23\u0E21\u0E40\u0E19\u0E35\u0E22\u0E21/\u0E04\u0E48\u0E32\u0E2A\u0E48\u0E07/\u0E04\u0E48\u0E32\u0E04\u0E2D\u0E21 \u0E40\u0E1E\u0E23\u0E32\u0E30\u0E40\u0E1B\u0E47\u0E19\u0E04\u0E48\u0E32\u0E43\u0E0A\u0E49\u0E08\u0E48\u0E32\u0E22\u0E23\u0E30\u0E14\u0E31\u0E1A\u0E1A\u0E34\u0E25)', 'cogs.sold':'\u0E02\u0E32\u0E22\u0E44\u0E14\u0E49 (\u0E0A\u0E34\u0E49\u0E19)', 'cogs.perBill':'\u0E23\u0E32\u0E22\u0E25\u0E30\u0E40\u0E2D\u0E35\u0E22\u0E14\u0E23\u0E32\u0E22\u0E1A\u0E34\u0E25', 'cogs.bills':'\u0E08\u0E33\u0E19\u0E27\u0E19\u0E1A\u0E34\u0E25', 'cogs.revenue':'\u0E22\u0E2D\u0E14\u0E02\u0E32\u0E22 (\u0E01\u0E48\u0E2D\u0E19 VAT)', 'cogs.total':'\u0E15\u0E49\u0E19\u0E17\u0E38\u0E19\u0E02\u0E32\u0E22\u0E23\u0E27\u0E21', 'cogs.profit':'\u0E01\u0E33\u0E44\u0E23\u0E02\u0E31\u0E49\u0E19\u0E15\u0E49\u0E19', 'cogs.margin':'\u0E2D\u0E31\u0E15\u0E23\u0E32\u0E01\u0E33\u0E44\u0E23', 'cogs.byCat':'\u0E15\u0E49\u0E19\u0E17\u0E38\u0E19\u0E15\u0E32\u0E21\u0E2B\u0E21\u0E27\u0E14\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32', 'cogs.byOrigin':'\u0E15\u0E49\u0E19\u0E17\u0E38\u0E19\u0E15\u0E32\u0E21\u0E41\u0E2B\u0E25\u0E48\u0E07\u0E17\u0E35\u0E48\u0E21\u0E32', 'cogs.byStatus':'\u0E15\u0E49\u0E19\u0E17\u0E38\u0E19 \u0E0A\u0E33\u0E23\u0E30\u0E41\u0E25\u0E49\u0E27 vs \u0E04\u0E49\u0E32\u0E07\u0E0A\u0E33\u0E23\u0E30', 'cogs.paid':'\u0E0A\u0E33\u0E23\u0E30\u0E41\u0E25\u0E49\u0E27', 'cogs.unpaid':'\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E0A\u0E33\u0E23\u0E30', 'cogs.short':'\u0E15\u0E49\u0E19\u0E17\u0E38\u0E19', 'cogs.barHint':'\u0E15\u0E49\u0E19\u0E17\u0E38\u0E19\u0E17\u0E35\u0E48\u0E08\u0E21\u0E43\u0E19\u0E1A\u0E34\u0E25\u0E17\u0E35\u0E48\u0E22\u0E31\u0E07\u0E40\u0E01\u0E47\u0E1A\u0E40\u0E07\u0E34\u0E19\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49 = \u0E40\u0E07\u0E34\u0E19\u0E17\u0E35\u0E48\u0E08\u0E48\u0E32\u0E22\u0E44\u0E1B\u0E41\u0E25\u0E49\u0E27\u0E41\u0E15\u0E48\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E01\u0E25\u0E31\u0E1A\u0E21\u0E32', 'cogs.missing':'\u0E21\u0E35 {n} \u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E17\u0E35\u0E48\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49\u0E23\u0E30\u0E1A\u0E38 lot \u0E15\u0E49\u0E19\u0E17\u0E38\u0E19 \u2014 \u0E15\u0E49\u0E19\u0E17\u0E38\u0E19\u0E17\u0E35\u0E48\u0E41\u0E2A\u0E14\u0E07\u0E2D\u0E32\u0E08\u0E15\u0E48\u0E33\u0E01\u0E27\u0E48\u0E32\u0E08\u0E23\u0E34\u0E07', 'inv.byStatus':'\u0E41\u0E22\u0E01\u0E15\u0E32\u0E21\u0E2A\u0E16\u0E32\u0E19\u0E30\u0E1A\u0E34\u0E25', 'inv.bills':'\u0E1A\u0E34\u0E25', 'inv.billed':'\u0E22\u0E2D\u0E14\u0E23\u0E27\u0E21\u0E17\u0E35\u0E48\u0E2D\u0E2D\u0E01\u0E1A\u0E34\u0E25', 'inv.received':'\u0E23\u0E31\u0E1A\u0E21\u0E32\u0E41\u0E25\u0E49\u0E27 (\u0E21\u0E31\u0E14\u0E08\u0E33)', 'inv.unpaid':'\u0E1A\u0E34\u0E25\u0E17\u0E35\u0E48\u0E22\u0E31\u0E07\u0E44\u0E21\u0E48\u0E44\u0E14\u0E49\u0E23\u0E31\u0E1A\u0E0A\u0E33\u0E23\u0E30', 'inv.empty':'\u0E44\u0E21\u0E48\u0E21\u0E35\u0E1A\u0E34\u0E25\u0E04\u0E49\u0E32\u0E07\u0E0A\u0E33\u0E23\u0E30', 'nav.orderHistory':'ประวัติแก้ไข', 'eh.record':'รายการ', 'eh.changes':'จำนวนครั้ง', 'eh.lastAction':'ล่าสุด', 'eh.lastEdited':'แก้ล่าสุด', 'eh.when':'วันเวลา', 'eh.by':'ผู้ทำ', 'eh.action':'การกระทำ', 'eh.viewRaw':'ดูข้อมูลดิบ', 'eh.back':'กลับ', 'eh.empty':'ยังไม่มีประวัติ', 'eh.rawTitle':'ข้อมูล ณ ตอนนั้น (raw)', 'eh.create':'สร้าง', 'eh.edit':'แก้ไข', 'eh.delete':'ลบ', 'eh.imgChanges':'\u0E01\u0E32\u0E23\u0E40\u0E1B\u0E25\u0E35\u0E48\u0E22\u0E19\u0E41\u0E1B\u0E25\u0E07\u0E23\u0E39\u0E1B', 'eh.imgAdded':'\u0E40\u0E1E\u0E34\u0E48\u0E21\u0E23\u0E39\u0E1B', 'eh.imgRemoved':'\u0E25\u0E1A\u0E23\u0E39\u0E1B', 'eh.imgNoName':'(\u0E44\u0E21\u0E48\u0E17\u0E23\u0E32\u0E1A\u0E0A\u0E37\u0E48\u0E2D\u0E44\u0E1F\u0E25\u0E4C)', 'eh.old':'เดิม', 'eh.new':'ใหม่', 'eh.viewDetail':'ดูรายละเอียด', 'eh.items':'รายการสินค้า', 'eh.note':'หมายเหตุ', 'del.empty':'ยังไม่มีรายการจัดส่ง', 'set.deliveryStatuses':'สถานะการจัดส่ง', 'set.shippingTypes':'ประเภทการจัดส่ง (Shipping Type)', 'set.outsources':'ผู้ให้บริการ Outsource', 'set.regionMode':'รูปแบบการแบ่งภูมิภาค', 'nav.grouping':'การจัดกลุ่ม', 'nav.shippingCost':'ค่าจัดส่ง', 'nav.deliveryList':'รายการจัดส่ง', 'nav.deliveryBoard':'สถานะการจัดส่ง', 'nav.deliveryCalendar':'ปฏิทิน', 'cal.driverType':'ประเภทคนขับ', 'cal.driver':'คนขับ', 'cal.allTypes':'ทุกประเภท', 'cal.allDrivers':'ทุกคน', 'cal.today':'วันนี้', 'cal.unscheduled':'ยังไม่กำหนดวัน {n} รายการ', 'cal.colorBy':'สีตาม', 'cal.byStatus':'สถานะ', 'cal.byType':'ประเภทคนขับ', 'cal.byDriver':'ชื่อคนขับ', 'nav.deliveryDrivers':'คนขับ', 'drv.title':'สีของคนขับ', 'drv.desc':'ตั้งสีให้คนขับแต่ละคน — ใช้แสดงในปฏิทินเมื่อเลือกสีตามคนขับ', 'drv.our':'คนขับของร้าน', 'drv.outsource':'Outsource', 'drv.empty':'ยังไม่มีคนขับ (เพิ่มพนักงานประเภท Delivery Driver หรือ Outsource ก่อน)', 'set.shipCost':'ค่าจัดส่ง', 'set.shipCategory':'ประเภทสินค้า (Category)', 'set.shipCostDesc':'ตั้งราคาค่าจัดส่ง — ตามภาค (4/6) หรือรายจังหวัด', 'set.shipMode':'รูปแบบการคิดราคา', 'set.shipByProvince':'รายจังหวัด', 'set.shipProvSwitch':'วิธีตั้งราคารายจังหวัด', 'set.shipException':'ตามภาค + ยกเว้นบางจังหวัด', 'set.shipManual':'ตั้งเองทุกจังหวัด', 'set.shipPickRegion':'เลือกภาค (เพื่อตั้งราคาจังหวัดในภาคนั้น)', 'set.shipRegionBase':'ราคาฐานของภาค', 'set.baht':'บาท', 'set.region4':'4 ภาค', 'set.region6':'6 ภาค', 'set.regionModeHint':'เลือกวิธีแบ่งภูมิภาค — มีผลกับคอลัมน์/ตัวกรอง "ภาค" ในหน้าจัดส่ง และสีแบ่งภาคบนแผนที่ (ไม่ต้องเก็บข้อมูลซ้ำ เพราะภาคคำนวณจากรหัสจังหวัด)',
+      'rev.invoiceNo': 'เลขบิล', 'col.lastEdited':'แก้ล่าสุด', 'rev.customer': 'ชื่อผู้รับ', 'rev.customerHint': 'ชื่อ-นามสกุลผู้รับ', 'rev.back':'กลับ', 'rev.mapHint':'หรือกดเลือกจังหวัดจากแผนที่', 'rev.selProvince':'จังหวัดที่เลือก', 'rev.noProvince':'ยังไม่ได้เลือกจังหวัด', 'region.north':'ภาคเหนือ', 'region.central':'ภาคกลาง', 'region.northeast':'ภาคตะวันออกเฉียงเหนือ', 'region.east':'ภาคตะวันออก', 'region.west':'ภาคตะวันตก', 'region.south':'ภาคใต้', 'rev.address': 'ที่อยู่ผู้รับ', 'rev.addressHint': 'ที่อยู่สำหรับจัดส่ง', 'rev.addrLine':'ที่อยู่ (บ้านเลขที่/หมู่/ซอย/ถนน)', 'rev.addrLineHint':'บ้านเลขที่ หมู่ ตรอก/ซอย ถนน', 'rev.province':'จังหวัด', 'rev.district':'อำเภอ/เขต', 'rev.subdistrict':'ตำบล/แขวง', 'rev.postal':'รหัสไปรษณีย์', 'rev.postalHint':'อัตโนมัติ', 'rev.loading':'กำลังโหลด...', 'rev.errAddrLine':'กรุณากรอกที่อยู่ (บ้านเลขที่/ซอย/ถนน)', 'rev.errAddrGeo':'กรุณาเลือกจังหวัด/อำเภอ/ตำบลให้ครบ', 'rev.platform': 'ขายผ่าน Platform', 'rev.platformHint': 'เช่น TikTok Shop', 'sec.delivery':'การจัดส่ง', 'sec.inventory':'รายการสินค้า (Inventory)', 'rev.phone':'เบอร์โทรติดต่อ', 'rev.phoneHint':'เบอร์โทรศัพท์ผู้รับ', 'rev.shippingTitle':'ค่าจัดส่ง', 'rev.shippingCost':'ค่าจัดส่ง', 'rev.shippingOverride':'ตั้งค่าส่งเอง (ทับ auto)', 'rev.shipAuto':'อัตโนมัติ', 'rev.shipNoCat':'ยังไม่มีสินค้า/หมวดหมู่', 'rev.discountsTitle':'ส่วนลด', 'rev.itemDiscount':'ส่วนลดสินค้า', 'rev.shippingDiscount':'ส่วนลดค่าส่ง', 'rev.overallDiscount':'ส่วนลดรวมทั้งบิล', 'rev.totalDiscount':'ส่วนลดรวม', 'rev.deliveryMethod':'วิธีจัดส่ง', 'rev.responsible':'ผู้รับผิดชอบ', 'rev.pickResp':'— เลือก —', 'rev.respHint':'ระบุผู้รับผิดชอบ', 'rev.proofLabel':'หลักฐานการจัดส่ง (Outsource)', 'rev.proofPick':'แนบไฟล์', 'rev.proofAttached':'แนบแล้ว', 'rev.proofNone':'ยังไม่ได้แนบ', 'rev.items': 'รายการสินค้า', 'del.allProvinces':'ทุกจังหวัด', 'del.allRegions':'ทุกภาค', 'del.allStatuses':'ทุกสถานะ', 'del.orderNo':'เลขที่ออเดอร์', 'del.recipient':'ผู้รับ', 'del.province':'จังหวัด', 'del.region':'ภาค', 'del.address':'ที่อยู่', 'del.status':'สถานะจัดส่ง', 'del.shipType':'วิธีจัดส่ง', 'del.responsible':'ผู้รับผิดชอบ', 'del.proof':'หลักฐาน', 'del.verified':'ยืนยัน', 'del.deliveryDate':'วันจัดส่ง', 'nav.productHistory':'ประวัติแก้ไข', 'nav.orderHistory':'ประวัติแก้ไข', 'eh.record':'รายการ', 'eh.changes':'จำนวนครั้ง', 'eh.lastAction':'ล่าสุด', 'eh.lastEdited':'แก้ล่าสุด', 'eh.when':'วันเวลา', 'eh.by':'ผู้ทำ', 'eh.action':'การกระทำ', 'eh.viewRaw':'ดูข้อมูลดิบ', 'eh.back':'กลับ', 'eh.empty':'ยังไม่มีประวัติ', 'eh.rawTitle':'ข้อมูล ณ ตอนนั้น (raw)', 'eh.create':'สร้าง', 'eh.edit':'แก้ไข', 'eh.delete':'ลบ', 'eh.imgChanges':'\u0E01\u0E32\u0E23\u0E40\u0E1B\u0E25\u0E35\u0E48\u0E22\u0E19\u0E41\u0E1B\u0E25\u0E07\u0E23\u0E39\u0E1B', 'eh.imgAdded':'\u0E40\u0E1E\u0E34\u0E48\u0E21\u0E23\u0E39\u0E1B', 'eh.imgRemoved':'\u0E25\u0E1A\u0E23\u0E39\u0E1B', 'eh.imgNoName':'(\u0E44\u0E21\u0E48\u0E17\u0E23\u0E32\u0E1A\u0E0A\u0E37\u0E48\u0E2D\u0E44\u0E1F\u0E25\u0E4C)', 'eh.old':'เดิม', 'eh.new':'ใหม่', 'eh.viewDetail':'ดูรายละเอียด', 'eh.items':'รายการสินค้า', 'eh.note':'หมายเหตุ', 'del.empty':'ยังไม่มีรายการจัดส่ง', 'set.deliveryStatuses':'สถานะการจัดส่ง', 'set.shippingTypes':'ประเภทการจัดส่ง (Shipping Type)', 'set.outsources':'ผู้ให้บริการ Outsource', 'set.regionMode':'รูปแบบการแบ่งภูมิภาค', 'nav.grouping':'การจัดกลุ่ม', 'nav.shippingCost':'ค่าจัดส่ง', 'nav.deliveryList':'รายการจัดส่ง', 'nav.deliveryBoard':'สถานะการจัดส่ง', 'nav.deliveryCalendar':'ปฏิทิน', 'cal.driverType':'ประเภทคนขับ', 'cal.driver':'คนขับ', 'cal.allTypes':'ทุกประเภท', 'cal.allDrivers':'ทุกคน', 'cal.today':'วันนี้', 'cal.unscheduled':'ยังไม่กำหนดวัน {n} รายการ', 'cal.colorBy':'สีตาม', 'cal.byStatus':'สถานะ', 'cal.byType':'ประเภทคนขับ', 'cal.byDriver':'ชื่อคนขับ', 'nav.deliveryDrivers':'คนขับ', 'drv.title':'สีของคนขับ', 'drv.desc':'ตั้งสีให้คนขับแต่ละคน — ใช้แสดงในปฏิทินเมื่อเลือกสีตามคนขับ', 'drv.our':'คนขับของร้าน', 'drv.outsource':'Outsource', 'drv.empty':'ยังไม่มีคนขับ (เพิ่มพนักงานประเภท Delivery Driver หรือ Outsource ก่อน)', 'set.shipCost':'ค่าจัดส่ง', 'set.shipCategory':'ประเภทสินค้า (Category)', 'set.shipCostDesc':'ตั้งราคาค่าจัดส่ง — ตามภาค (4/6) หรือรายจังหวัด', 'set.shipMode':'รูปแบบการคิดราคา', 'set.shipByProvince':'รายจังหวัด', 'set.shipProvSwitch':'วิธีตั้งราคารายจังหวัด', 'set.shipException':'ตามภาค + ยกเว้นบางจังหวัด', 'set.shipManual':'ตั้งเองทุกจังหวัด', 'set.shipPickRegion':'เลือกภาค (เพื่อตั้งราคาจังหวัดในภาคนั้น)', 'set.shipRegionBase':'ราคาฐานของภาค', 'set.baht':'บาท', 'set.region4':'4 ภาค', 'set.region6':'6 ภาค', 'set.regionModeHint':'เลือกวิธีแบ่งภูมิภาค — มีผลกับคอลัมน์/ตัวกรอง "ภาค" ในหน้าจัดส่ง และสีแบ่งภาคบนแผนที่ (ไม่ต้องเก็บข้อมูลซ้ำ เพราะภาคคำนวณจากรหัสจังหวัด)',
       'rev.orderStatus': 'สถานะออเดอร์', 'rev.invoiceStatus': 'สถานะใบเสร็จ', 'rev.totalRows': 'รวม',
       'rev.empty': 'ยังไม่มีออเดอร์ เริ่มเพิ่มออเดอร์แรกได้เลย', 'rev.delConfirm': 'ลบออเดอร์นี้?',
       'rev.addItem': '+ เพิ่มสินค้า', 'rev.itemName': 'ชื่อสินค้า', 'rev.itemProduct': 'สินค้า', 'rev.itemQty': 'จำนวน', 'rev.itemDisc': 'ส่วนลด', 'rev.itemNet': 'สุทธิ', 'rev.itemPrice': 'ราคา', 'rev.itemsTotal': 'รวมสินค้า',
@@ -5431,7 +3878,7 @@
       'io.csvExportLabel': 'หรือส่งออกทีละตารางเป็น CSV (เปิดด้วย Excel ได้):', 'io.csvExp': 'CSV รายจ่าย', 'io.csvOrd': 'CSV ออเดอร์', 'io.csvProd': 'CSV สินค้า',
       'io.importNote': '⚠️ นำเข้า CSV ได้เฉพาะ รายจ่าย และ สินค้า เท่านั้น (รหัสใหม่=สร้าง · รหัสเดิม=แก้ไข · ใส่ delete ในคอลัมน์ action=ลบ) — ส่วนออเดอร์นำเข้าได้เฉพาะไฟล์ JSON (เพราะรายการสินค้าผูกกับรหัสสินค้า)',
       'io.csvDone': 'นำเข้า {t} สำเร็จ — สร้าง {c} · แก้ไข {u} · ลบ {d}', 'io.tbl_expenses': 'รายจ่าย', 'io.tbl_products': 'สินค้า', 'prod.addTitle': 'เพิ่มสินค้า', 'prod.editTitle': 'แก้ไขสินค้า',
-      'img.max5':'\u0E2A\u0E39\u0E07\u0E2A\u0E38\u0E14 5 \u0E23\u0E39\u0E1B', 'pc.pickColor':'\u2014 \u0E40\u0E25\u0E37\u0E2D\u0E01\u0E2A\u0E35 \u2014', 'rev.pickColorFirst':'\u0E40\u0E25\u0E37\u0E2D\u0E01\u0E2A\u0E35\u0E01\u0E48\u0E2D\u0E19 \u0E08\u0E36\u0E07\u0E08\u0E30\u0E40\u0E25\u0E37\u0E2D\u0E01\u0E41\u0E2B\u0E25\u0E48\u0E07\u0E15\u0E49\u0E19\u0E17\u0E38\u0E19\u0E44\u0E14\u0E49', 'rev.errPickColor':'\u0E01\u0E23\u0E38\u0E13\u0E32\u0E40\u0E25\u0E37\u0E2D\u0E01\u0E2A\u0E35\u0E02\u0E2D\u0E07 {p}', 'pc.noColor':'\u0E44\u0E21\u0E48\u0E23\u0E30\u0E1A\u0E38\u0E2A\u0E35', 'pc.colorLabel':'\u0E2A\u0E35', 'prod.desc':'\u0E23\u0E32\u0E22\u0E25\u0E30\u0E40\u0E2D\u0E35\u0E22\u0E14\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32', 'prod.descPh':'\u0E04\u0E33\u0E2D\u0E18\u0E34\u0E1A\u0E32\u0E22\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32 \u0E27\u0E31\u0E2A\u0E14\u0E38 \u0E02\u0E19\u0E32\u0E14 \u0E01\u0E32\u0E23\u0E14\u0E39\u0E41\u0E25 ฯลฯ', 'pc.section':'\u0E41\u0E1A\u0E1A\u0E2A\u0E35', 'pc.enable':'\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32\u0E19\u0E35\u0E49\u0E21\u0E35\u0E41\u0E1A\u0E1A\u0E2A\u0E35', 'pc.add':'+ \u0E40\u0E1E\u0E34\u0E48\u0E21\u0E2A\u0E35', 'pc.namePh':'\u0E0A\u0E37\u0E48\u0E2D\u0E2A\u0E35', 'pc.image':'\u0E23\u0E39\u0E1B\u0E02\u0E2D\u0E07\u0E2A\u0E35\u0E19\u0E35\u0E49', 'pc.rmImage':'\u0E40\u0E2D\u0E32\u0E23\u0E39\u0E1B\u0E2D\u0E2D\u0E01', 'prod.tagAuto':'\u0E15\u0E31\u0E49\u0E07\u0E43\u0E2B\u0E49\u0E2D\u0E31\u0E15\u0E42\u0E19\u0E21\u0E31\u0E15\u0E34\u0E15\u0E32\u0E21\u0E2A\u0E15\u0E4A\u0E2D\u0E01\u0E04\u0E07\u0E40\u0E2B\u0E25\u0E37\u0E2D', 'prod.image': 'รูป', 'sec.detail':'รายละเอียดสินค้า', 'sec.cost':'ต้นทุน', 'sec.selling':'การขาย', 'sec.evidence':'หลักฐาน', 'sec.product':'สินค้า', 'sec.order':'ออเดอร์', 'sec.customer':'ลูกค้า', 'prod.bill':'ใบซื้อ/บิล', 'bill.tooBig':'ไฟล์ใหญ่เกิน 256KB', 'prod.sku': 'รหัสสินค้า', 'prod.name': 'ชื่อสินค้า', 'prod.cost': 'ต้นทุน', 'prod.price': 'ราคาขาย',
+      'img.max5':'\u0E2A\u0E39\u0E07\u0E2A\u0E38\u0E14 5 \u0E23\u0E39\u0E1B', 'pc.pickColor':'\u2014 \u0E40\u0E25\u0E37\u0E2D\u0E01\u0E2A\u0E35 \u2014', 'rev.pickColorFirst':'\u0E40\u0E25\u0E37\u0E2D\u0E01\u0E2A\u0E35\u0E01\u0E48\u0E2D\u0E19 \u0E08\u0E36\u0E07\u0E08\u0E30\u0E40\u0E25\u0E37\u0E2D\u0E01\u0E41\u0E2B\u0E25\u0E48\u0E07\u0E15\u0E49\u0E19\u0E17\u0E38\u0E19\u0E44\u0E14\u0E49', 'rev.errPickColor':'\u0E01\u0E23\u0E38\u0E13\u0E32\u0E40\u0E25\u0E37\u0E2D\u0E01\u0E2A\u0E35\u0E02\u0E2D\u0E07 {p}', 'pc.noColor':'\u0E44\u0E21\u0E48\u0E23\u0E30\u0E1A\u0E38\u0E2A\u0E35', 'pc.colorLabel':'\u0E2A\u0E35', 'prod.desc':'\u0E23\u0E32\u0E22\u0E25\u0E30\u0E40\u0E2D\u0E35\u0E22\u0E14\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32', 'prod.descPh':'\u0E04\u0E33\u0E2D\u0E18\u0E34\u0E1A\u0E32\u0E22\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32 \u0E27\u0E31\u0E2A\u0E14\u0E38 \u0E02\u0E19\u0E32\u0E14 \u0E01\u0E32\u0E23\u0E14\u0E39\u0E41\u0E25 ฯลฯ', 'pc.section':'\u0E41\u0E1A\u0E1A\u0E2A\u0E35', 'pc.enable':'\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32\u0E19\u0E35\u0E49\u0E21\u0E35\u0E41\u0E1A\u0E1A\u0E2A\u0E35', 'pc.add':'+ \u0E40\u0E1E\u0E34\u0E48\u0E21\u0E2A\u0E35', 'pc.namePh':'\u0E0A\u0E37\u0E48\u0E2D\u0E2A\u0E35', 'pc.image':'\u0E23\u0E39\u0E1B\u0E02\u0E2D\u0E07\u0E2A\u0E35\u0E19\u0E35\u0E49', 'pc.rmImage':'\u0E40\u0E2D\u0E32\u0E23\u0E39\u0E1B\u0E2D\u0E2D\u0E01', 'prod.image': 'รูป', 'sec.detail':'รายละเอียดสินค้า', 'sec.cost':'ต้นทุน', 'sec.selling':'การขาย', 'sec.evidence':'หลักฐาน', 'sec.product':'สินค้า', 'sec.order':'ออเดอร์', 'sec.customer':'ลูกค้า', 'prod.bill':'ใบซื้อ/บิล', 'bill.tooBig':'ไฟล์ใหญ่เกิน 256KB', 'prod.sku': 'รหัสสินค้า', 'prod.name': 'ชื่อสินค้า', 'prod.cost': 'ต้นทุน', 'prod.price': 'ราคาขาย',
       'prod.sale': 'ลดราคา',
       'promo.btn': 'โปรโมชั่น', 'promo.navLabel': 'โปรโมชัน',
       'promo.title': 'จัดการโปรโมชัน', 'promo.desc': 'ตั้งช่วงลดราคาตามหมวดหมู่/สินค้า · สินค้าจะลดอัตโนมัติเมื่อถึงช่วงเวลา และหยุดเองเมื่อพ้นวันสิ้นสุด (ตรวจตอนเปิดแอป)',
@@ -5464,15 +3911,15 @@
       'bp.logo': 'โลโก้', 'bp.signature': 'ลายเซ็น', 'bp.stamp': 'ตราประทับ', 'bp.vatDefault': 'ค่าเริ่มต้น: คำนวณ VAT 7%', 'bp.remove': 'ลบรูป',
       'doc.rv.title': 'ใบสำคัญรับเงิน', 'doc.optsDesc': 'เลือกตัวเลือกก่อนออกเอกสาร แล้วสั่งพิมพ์/บันทึกเป็น PDF',
       'doc.bn.title': 'ใบวางบิล', 'doc.rc.title': 'ใบเสร็จรับเงิน', 'doc.makeTitle': 'ออกเอกสาร',
-      'doc.billTo': 'วางบิลถึง', 'doc.biller': 'ลายเซ็นพนักงานขาย', 'doc.billReceiver': 'ลงชื่อผู้รับวางบิล',
+      'doc.billTo': 'วางบิลถึง', 'doc.biller': 'ลงชื่อผู้วางบิล', 'doc.billReceiver': 'ลงชื่อผู้รับวางบิล',
       'doc.st.received': 'ได้รับเงินไว้เป็นการถูกต้องเรียบร้อยแล้ว', 'doc.st.pleasePay': 'กรุณาชำระเงินตามยอดรวมข้างต้น',
-      'doc.noProfile': '⚠ ยังไม่ได้กรอกข้อมูลร้านในหน้า Setting เอกสารจะไม่มีหัวร้าน', 'doc.reference':'\u0E2D\u0E49\u0E32\u0E07\u0E2D\u0E34\u0E07', 'doc.createdBy':'\u0E1C\u0E39\u0E49\u0E2A\u0E23\u0E49\u0E32\u0E07\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23', 'doc.custTaxId':'\u0E40\u0E25\u0E02\u0E1B\u0E23\u0E30\u0E08\u0E33\u0E15\u0E31\u0E27\u0E1C\u0E39\u0E49\u0E40\u0E2A\u0E35\u0E22\u0E20\u0E32\u0E29\u0E35', 'doc.custPhone':'\u0E42\u0E17\u0E23.', 'doc.col.code':'\u0E23\u0E2B\u0E31\u0E2A\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32', 'doc.taxCustomer':'\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25\u0E1C\u0E39\u0E49\u0E0B\u0E37\u0E49\u0E2D (\u0E2A\u0E33\u0E2B\u0E23\u0E31\u0E1A\u0E43\u0E1A\u0E01\u0E33\u0E01\u0E31\u0E1A\u0E20\u0E32\u0E29\u0E35)', 'doc.taxCustomerHint':'\u0E02\u0E49\u0E2D\u0E21\u0E39\u0E25\u0E15\u0E23\u0E07\u0E19\u0E35\u0E49\u0E08\u0E30\u0E44\u0E1B\u0E41\u0E17\u0E19\u0E0A\u0E37\u0E48\u0E2D-\u0E17\u0E35\u0E48\u0E2D\u0E22\u0E39\u0E48\u0E1C\u0E39\u0E49\u0E23\u0E31\u0E1A\u0E1A\u0E19\u0E40\u0E2D\u0E01\u0E2A\u0E32\u0E23 \u00B7 \u0E23\u0E30\u0E1A\u0E1A\u0E08\u0E30\u0E08\u0E33\u0E44\u0E27\u0E49\u0E43\u0E2B\u0E49', 'doc.custCompany':'\u0E0A\u0E37\u0E48\u0E2D\u0E1A\u0E23\u0E34\u0E29\u0E31\u0E17\u0E25\u0E39\u0E01\u0E04\u0E49\u0E32', 'doc.custAddress':'\u0E17\u0E35\u0E48\u0E2D\u0E22\u0E39\u0E48\u0E1A\u0E23\u0E34\u0E29\u0E31\u0E17\u0E25\u0E39\u0E01\u0E04\u0E49\u0E32', 'doc.dp.title':'\u0E43\u0E1A\u0E23\u0E31\u0E1A\u0E21\u0E31\u0E14\u0E08\u0E33', 'doc.dp.disabled':'\u0E2D\u0E2D\u0E01\u0E44\u0E14\u0E49\u0E40\u0E09\u0E1E\u0E32\u0E30\u0E1A\u0E34\u0E25\u0E17\u0E35\u0E48\u0E22\u0E31\u0E07\u0E21\u0E35\u0E22\u0E2D\u0E14\u0E04\u0E49\u0E32\u0E07\u0E0A\u0E33\u0E23\u0E30', 'doc.dp.paid':'\u0E23\u0E31\u0E1A\u0E21\u0E31\u0E14\u0E08\u0E33\u0E41\u0E25\u0E49\u0E27', 'doc.dp.balance':'\u0E04\u0E07\u0E40\u0E2B\u0E25\u0E37\u0E2D\u0E15\u0E49\u0E2D\u0E07\u0E0A\u0E33\u0E23\u0E30', 'doc.st.deposit':'\u0E44\u0E14\u0E49\u0E23\u0E31\u0E1A\u0E40\u0E07\u0E34\u0E19\u0E21\u0E31\u0E14\u0E08\u0E33\u0E44\u0E27\u0E49\u0E40\u0E23\u0E35\u0E22\u0E1A\u0E23\u0E49\u0E2D\u0E22\u0E41\u0E25\u0E49\u0E27', 'doc.tx.title':'\u0E43\u0E1A\u0E01\u0E33\u0E01\u0E31\u0E1A\u0E20\u0E32\u0E29\u0E35', 'doc.vatCalc':'\u0E1A\u0E34\u0E25\u0E19\u0E35\u0E49\u0E04\u0E33\u0E19\u0E27\u0E13 VAT 7%', 'doc.splitHint':'\u0E23\u0E39\u0E1B\u0E41\u0E1A\u0E1A\u0E19\u0E35\u0E49\u0E1C\u0E39\u0E01\u0E01\u0E31\u0E1A\u0E1A\u0E34\u0E25 \u2014 \u0E16\u0E49\u0E32\u0E41\u0E22\u0E01\u0E1A\u0E34\u0E25 \u0E04\u0E48\u0E32\u0E2A\u0E48\u0E07\u0E08\u0E30\u0E44\u0E21\u0E48\u0E16\u0E39\u0E01\u0E04\u0E34\u0E14 VAT \u0E41\u0E25\u0E30 NET \u0E08\u0E30\u0E1B\u0E23\u0E31\u0E1A\u0E43\u0E2B\u0E49\u0E17\u0E31\u0E19\u0E17\u0E35', 'doc.splitShort':'\u0E41\u0E22\u0E01', 'doc.payFromOrder':'\u0E27\u0E34\u0E18\u0E35\u0E0A\u0E33\u0E23\u0E30\u0E40\u0E07\u0E34\u0E19 (\u0E15\u0E32\u0E21\u0E17\u0E35\u0E48\u0E23\u0E30\u0E1A\u0E38\u0E43\u0E19\u0E1A\u0E34\u0E25)', 'eh.billDetails':'\u0E23\u0E32\u0E22\u0E25\u0E30\u0E40\u0E2D\u0E35\u0E22\u0E14\u0E40\u0E01\u0E35\u0E48\u0E22\u0E27\u0E01\u0E31\u0E1A\u0E1A\u0E34\u0E25', 'doc.splitMode':'\u0E23\u0E39\u0E1B\u0E41\u0E1A\u0E1A\u0E1A\u0E34\u0E25', 'doc.splitTogether':'\u0E23\u0E27\u0E21\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32+\u0E04\u0E48\u0E32\u0E2A\u0E48\u0E07', 'doc.splitApart':'\u0E41\u0E22\u0E01\u0E1A\u0E34\u0E25', 'doc.makeGoods':'\u0E2D\u0E2D\u0E01\u0E1A\u0E34\u0E25\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32', 'doc.makeShip':'\u0E2D\u0E2D\u0E01\u0E1A\u0E34\u0E25\u0E04\u0E48\u0E32\u0E2A\u0E48\u0E07', 'doc.goodsOnly':'\u0E40\u0E09\u0E1E\u0E32\u0E30\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32', 'doc.shipOnly':'\u0E40\u0E09\u0E1E\u0E32\u0E30\u0E04\u0E48\u0E32\u0E2A\u0E48\u0E07', 'doc.taxId':'\u0E40\u0E25\u0E02\u0E1B\u0E23\u0E30\u0E08\u0E33\u0E15\u0E31\u0E27\u0E1C\u0E39\u0E49\u0E40\u0E2A\u0E35\u0E22\u0E20\u0E32\u0E29\u0E35', 'bp.branch':'\u0E2A\u0E32\u0E02\u0E32', 'bp.branchDefault':'\u0E2A\u0E33\u0E19\u0E31\u0E01\u0E07\u0E32\u0E19\u0E43\u0E2B\u0E0D\u0E48', 'pay.vatNo':'\u0E44\u0E21\u0E48\u0E04\u0E34\u0E14 VAT', 'doc.vat': 'คำนวณ VAT 7% (ราคารวม VAT แล้ว)',
+      'doc.noProfile': '⚠ ยังไม่ได้กรอกข้อมูลร้านในหน้า Setting เอกสารจะไม่มีหัวร้าน', 'doc.vat': 'คำนวณ VAT 7% (ราคารวม VAT แล้ว)',
       'doc.payMethod': 'วิธีชำระเงิน', 'doc.pay.cash': 'เงินสด', 'doc.pay.transfer': 'โอนเงิน', 'doc.pay.other': 'อื่น ๆ',
       'doc.make': 'ออกเอกสาร', 'doc.popupBlocked': 'เบราว์เซอร์บล็อกป๊อปอัป กรุณาอนุญาตแล้วลองใหม่', 'doc.print': 'พิมพ์ / บันทึก PDF',
       'doc.yourStore': '(ชื่อร้านของคุณ)', 'doc.no': 'เลขที่', 'doc.date': 'วันที่', 'doc.receivedFrom': 'ได้รับเงินจาก', 'doc.ref': 'อ้างอิงเลขที่',
       'doc.col.no': 'ลำดับ', 'doc.col.item': 'รายการ', 'doc.col.qty': 'จำนวน', 'doc.col.unit': 'ราคา/หน่วย', 'doc.col.amount': 'จำนวนเงิน',
       'doc.subtotal': 'รวมเป็นเงิน', 'doc.discount': 'ส่วนลด', 'doc.shipping':'ค่าจัดส่ง', 'doc.itemDiscount':'ส่วนลดสินค้า', 'doc.shipDiscount':'ส่วนลดค่าส่ง', 'doc.overallDiscount':'ส่วนลดรวมบิล', 'doc.totalDiscount':'ส่วนลดทั้งหมด', 'doc.showDiscounts':'แสดงส่วนลด', 'doc.discItem':'สินค้า', 'doc.discShip':'ค่าส่ง', 'doc.discOverall':'รวมบิล', 'doc.language':'ภาษาเอกสาร', 'doc.langTh':'ไทย', 'doc.langEn':'อังกฤษ', 'doc.beforeVat': 'มูลค่าก่อน VAT', 'doc.vat7': 'ภาษีมูลค่าเพิ่ม 7%', 'doc.grand': 'รวมทั้งสิ้น',
-      'doc.amountWords': 'จำนวนเงิน (ตัวอักษร)', 'doc.payer': 'ลงชื่อผู้จ่ายเงิน', 'doc.payee': 'ลายเซ็นพนักงานขาย', 'doc.footNote': 'เอกสารนี้ออกจากระบบ Simple Store',
+      'doc.amountWords': 'จำนวนเงิน (ตัวอักษร)', 'doc.payer': 'ลงชื่อผู้จ่ายเงิน', 'doc.payee': 'ลงชื่อผู้รับเงิน', 'doc.footNote': 'เอกสารนี้ออกจากระบบ Simple Store',
       'nav.account': 'รายงานรายเดือน', 'nav.deleted':'\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E17\u0E35\u0E48\u0E16\u0E39\u0E01\u0E25\u0E1A', 'bin.desc':'\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E17\u0E35\u0E48\u0E16\u0E39\u0E01\u0E25\u0E1A\u0E08\u0E30\u0E44\u0E21\u0E48\u0E16\u0E39\u0E01\u0E19\u0E31\u0E1A\u0E23\u0E27\u0E21\u0E43\u0E19\u0E22\u0E2D\u0E14\u0E43\u0E14 \u0E46 \u0E08\u0E19\u0E01\u0E27\u0E48\u0E32\u0E08\u0E30\u0E01\u0E39\u0E49\u0E04\u0E37\u0E19', 'bin.products':'\u0E2A\u0E34\u0E19\u0E04\u0E49\u0E32\u0E17\u0E35\u0E48\u0E16\u0E39\u0E01\u0E25\u0E1A', 'bin.orders':'\u0E1A\u0E34\u0E25\u0E17\u0E35\u0E48\u0E16\u0E39\u0E01\u0E25\u0E1A', 'bin.restore':'\u0E01\u0E39\u0E49\u0E04\u0E37\u0E19', 'bin.confirm':'\u0E01\u0E39\u0E49\u0E04\u0E37\u0E19\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23\u0E19\u0E35\u0E49\u0E01\u0E25\u0E31\u0E1A\u0E44\u0E1B\u0E23\u0E27\u0E21\u0E43\u0E19\u0E22\u0E2D\u0E14\u0E2B\u0E25\u0E31\u0E01?', 'bin.qty':'\u0E08\u0E33\u0E19\u0E27\u0E19\u0E04\u0E07\u0E40\u0E2B\u0E25\u0E37\u0E2D', 'bin.lotValue':'\u0E21\u0E39\u0E25\u0E04\u0E48\u0E32\u0E15\u0E49\u0E19\u0E17\u0E38\u0E19', 'bin.expenses':'\u0E23\u0E32\u0E22\u0E08\u0E48\u0E32\u0E22\u0E17\u0E35\u0E48\u0E1E\u0E48\u0E27\u0E07', 'bin.deletedBy':'\u0E25\u0E1A\u0E42\u0E14\u0E22', 'bin.empty':'\u0E44\u0E21\u0E48\u0E21\u0E35\u0E23\u0E32\u0E22\u0E01\u0E32\u0E23', 'acct.cogs':'\u0E15\u0E49\u0E19\u0E17\u0E38\u0E19\u0E02\u0E32\u0E22', 'acct.profit':'\u0E01\u0E33\u0E44\u0E23\u0E15\u0E48\u0E2D\u0E1A\u0E34\u0E25', 'nav.vat':'\u0E04\u0E33\u0E19\u0E27\u0E13 VAT', 'vat.base':'\u0E01\u0E48\u0E2D\u0E19 VAT', 'vat.amount':'VAT 7%', 'vat.totalNet':'\u0E22\u0E2D\u0E14\u0E23\u0E27\u0E21', 'vat.totalBase':'\u0E23\u0E27\u0E21\u0E01\u0E48\u0E2D\u0E19 VAT', 'vat.totalVat':'VAT \u0E23\u0E27\u0E21', 'nav.ledger': 'สมุดบัญชี (Ledger)', 'acct.summary': 'สรุป', 'acct.table': 'รายการ (Table)', 'acct.monthlyTitle': 'รายรับรายจ่ายรายเดือน',
       'acct.year': 'ปี', 'acct.month': 'เดือน', 'acct.income': 'รายรับ', 'acct.expense': 'รายจ่าย', 'acct.net': 'คงเหลือสุทธิ', 'acct.yearNet': 'สุทธิทั้งปี',
       'acct.vatMode': 'การคำนวณ VAT', 'acct.vatAll': 'คิด VAT ทั้งหมด', 'acct.vatTicked': 'เฉพาะรายการที่ติ๊ก', 'acct.vatNone': 'ไม่คิด VAT',
@@ -5493,7 +3940,7 @@
       'sum.period': 'Period', 'sum.allTime': 'All time', 'sum.tag': 'Tag', 'sum.netTotal': 'Net Total', 'sum.percent': '% of total',
       'sum.sum': 'Sum', 'sum.totalNet': 'Total expenses (net)', 'sum.count': 'Entries', 'sum.avg': 'Average per entry', 'sum.byCategory':'Cost by product category', 'sum.byOrigin':'Cost by cost origin', 'sum.uncategorised':'Uncategorised', 'sum.noOrigin':'No origin', 'sum.noData': 'No data in this period yet',
       'rev.add': '+ Add order', 'rev.addTitle': 'Add order', 'rev.editTitle': 'Edit order',
-      'rev.invoiceNo': 'Invoice #', 'col.lastEdited':'Last edited', 'rev.customer': 'Recipient', 'rev.customerHint': 'Recipient full name', 'rev.back':'Back', 'rev.mapHint':'Or pick a province on the map', 'rev.selProvince':'Selected province', 'rev.noProvince':'No province selected', 'region.north':'North', 'region.central':'Central', 'region.northeast':'Northeast', 'region.east':'East', 'region.west':'West', 'region.south':'South', 'rev.address': 'Recipient address', 'rev.addressHint': 'Shipping address', 'rev.addrLine':'Address (no./soi/road)', 'rev.addrLineHint':'House no., moo, soi, road', 'rev.province':'Province', 'rev.district':'District', 'rev.subdistrict':'Subdistrict', 'rev.postal':'Postal code', 'rev.postalHint':'Auto', 'rev.loading':'Loading...', 'rev.errAddrLine':'Please enter the address line', 'rev.errAddrGeo':'Please select province/district/subdistrict', 'sec.seller':'Seller', 'sell.issuedBy':'Issued by', 'sell.signature':'Signature', 'sell.clear':'Clear', 'sell.upload':'Upload image', 'sell.signHint':'Draw in the box, or upload an image (max 256KB)', 'sell.errSign':'Please sign before saving', 'sell.seller':'Seller', 'rev.platformFee':'Platform fee', 'rev.platform': 'Sold via Platform', 'rev.platformHint': 'e.g. TikTok Shop', 'sec.delivery':'Delivery', 'sec.inventory':'Inventory', 'rev.phone':'Phone', 'rev.phoneHint':'Contact phone', 'rev.shippingTitle':'Shipping', 'rev.shippingCost':'Shipping', 'rev.shippingOverride':'Override shipping (manual)', 'rev.shipAuto':'Auto', 'rev.shipNoCat':'No products/categories yet', 'sec.vat':'VAT Management', 'sec.payment':'Payment', 'pay.mode':'Payment Method', 'pay.paid':'Partially Paid', 'pay.vatable':'This bill is charged VAT 7% (added on top of the net)', 'pay.vat':'VAT', 'pay.vatSeparated':'Separated', 'pay.vatYes':'VAT 7%', 'pay.noProof':'No payment proof attached to this bill', 'pay.proof':'Payment proof', 'pay.proofHint':'Up to 5 files (max 256KB each)', 'pay.download':'Download', 'pay.pending':'Amount Pending', 'set.colTh':'Thai name (TH)', 'set.colEn':'English name (EN)', 'set.colFee':'Fee %', 'set.colColor':'Colour', 'set.expenseCategories':'Expense Categories', 'set.platforms':'Sales Platforms', 'set.feeHint':'Platform fee (%)', 'set.paymentModes':'Payment Methods', 'rev.discountsTitle':'Discounts', 'rev.itemDiscount':'Item Discount', 'rev.shippingDiscount':'Shipping Discount', 'rev.overallDiscount':'Overall Discount', 'rev.totalDiscount':'Total Discount', 'rev.deliveryMethod':'Delivery Method', 'rev.responsible':'Responsible', 'rev.pickResp':'— select —', 'rev.respHint':'Enter responsible', 'rev.proofLabel':'Delivery proof (Outsource)', 'rev.proofPick':'Attach file', 'rev.proofAttached':'Attached', 'rev.proofNone':'No file', 'rev.items': 'Items', 'del.allProvinces':'All provinces', 'del.allRegions':'All regions', 'del.allStatuses':'All statuses', 'del.orderNo':'Order #', 'del.recipient':'Recipient', 'del.province':'Province', 'del.region':'Region', 'del.address':'Address', 'del.status':'Delivery status', 'del.shipType':'Shipping Type', 'del.responsible':'Responsible', 'del.proof':'Proof', 'del.verified':'Verified', 'del.deliveryDate':'Delivery Date', 'nav.productHistory':'Edit History', 'nav.invoicing':'Invoicing', 'nav.arStatus':'AR Status', 'nav.receipts':'Receipts', 'rc.avg':'Average per receipt', 'inv.deposit':'Deposits received', 'rc.count':'Receipts', 'rc.total':'Total', 'rc.byMode':'By payment mode', 'rc.receipts':'receipts', 'rc.empty':'Nothing paid yet', 'se.delivery':'Actual delivery fee', 'se.other':'Other expenses', 'se.status':'Status', 'se.added':'Added', 'se.none':'No expense', 'se.addNote':'Add a note', 'nav.sellingExpenses':'Selling Expenses', 'ap.mass':'Mass settle', 'ap.massBody':'All {n} entries currently in view will be set to Paid + verified, and the attached files copied onto each of them · you still need to press Save', 'ap.paidAmount':'Paid amount', 'ap.mass':'Mark all as paid', 'ap.massBody':'All {n} row(s) currently shown ({amt} ฿) will be set to Paid and Verified', 'ap.massProofHint':'Any file added here is copied to every row (optional)', 'ox.updatedBy':'Updated by', 'nav.opexHistory':'Edit History', 'nav.finOverview':'Overview', 'nav.pnl':'Profit & Loss', 'nav.cashFlow':'Cash Flow', 'nav.taxReport':'Sales Tax', 'tax.modeVat':'VAT bills', 'tax.modeNoVat':'Non-VAT bills', 'tax.invoices':'Tax invoices', 'tax.billsNoVat':'Bills without VAT', 'tax.base':'Value before VAT', 'tax.output':'Output VAT (7%)', 'tax.grand':'Total incl. VAT', 'tax.byMonth':'Monthly summary (for filing)', 'tax.detail':'Tax invoice detail', 'tax.detailNoVat':'Bills excluded from the report', 'tax.issuer':'Issuer', 'tax.empty':'Nothing in this period', 'tax.hint':'Only bills ticked as VAT are pulled in · on a split bill the shipping sits outside the tax base · output VAT only, input VAT is not deducted', 'tax.hintNoVat':'These bills are NOT counted in the sales tax report — listed here so a missed VAT tick is easy to spot', 'cd.noteTitle':'Remark on documents', 'cd.noteHint':'This is the DEFAULT remark filled into the Remark box of every new bill — each bill can then be edited on its own, and documents print whatever that bill says', 'cd.notePh':'e.g. warranty terms, care instructions, contact channels', 'cd.saved':'Saved', 'cd.previewTitle':'How it will look', 'cd.previewHint':'It appears just above the signature area', 'cd.previewEmpty':'No remark yet', 'rev.remarkHint':'Prints on the document · starts from the Customer Document default, editable per bill', 'rev.noteHint':'Internal note — never printed', 'noAccess':'This role has no access to any tab on this page', 'cd.remark':'Remark', 'fin.allTime':'All time', 'fin.custom':'Custom range', 'fin.thisMonth':'This month', 'fin.netProfit':'Net profit', 'fin.cashIn':'Cash in', 'fin.cashOut':'Cash out', 'fin.cashNet':'Net cash', 'fin.ar':'Receivables', 'fin.ap':'Payables', 'fin.revByPlatform':'Revenue by channel', 'fin.revShort':'revenue', 'fin.costMix':'Where the money goes', 'fin.health':'Financial health', 'fin.healthHint':'Figures that always deserve a look — these ignore the period filter', 'fin.item':'Item', 'fin.count':'Count', 'fin.note':'Note', 'fin.hAr':'Bills not yet collected', 'fin.hArNote':'Chase these on the Invoicing page', 'fin.hAp':'Stock bills not yet paid', 'fin.hApNote':'Managed on the AP page', 'fin.hStock':'Stock value on hand', 'fin.hStockNote':'Cash tied up in goods', 'fin.hLoss':'Bills sold at a loss', 'fin.hLossNote':'Check them in COGS Tracking', 'fin.hVat':'VAT collected from customers', 'fin.hVatNote':'Not your revenue', 'fin.statement':'Profit & loss statement', 'fin.ofRevenue':'% of revenue', 'fin.revenue':'Sales revenue', 'fin.sellingExp':'Selling expenses', 'fin.afterSelling':'Profit after selling costs', 'fin.noOpex':'No operating expenses in this period', 'fin.revTrend':'Revenue, last 6 months', 'fin.netTrend':'Net profit, last 6 months', 'fin.trendHint':'Revenue growing while profit does not usually means costs are eating the margin', 'fin.byMonth':'Month by month', 'fin.month':'Month', 'fin.movement':'Movement', 'fin.party':'Party', 'fin.in':'In', 'fin.out':'Out', 'fin.mCustomer':'From customer', 'fin.mSupplier':'To supplier', 'fin.noMoves':'No money moved in this period', 'fin.inTrend':'Cash in by month', 'fin.outTrend':'Cash out by month', 'fin.cashHint':'Cash differs from profit — a sale you have not been paid for brings in nothing', 'fin.vsProfit':'Cash vs profit', 'ox.category':'Category', 'ox.details':'Details', 'ox.amount':'Amount', 'ox.receipt':'Receipt', 'ox.add':'+ Add entry', 'ox.addTitle':'Record a new expense', 'ox.addHint':'Fill in and press Enter · rows can be edited in the table and save instantly', 'ox.descPh':'What was it for?', 'ox.count':'Entries', 'ox.total':'Total spent', 'ox.avg':'Average per entry', 'ox.biggest':'Biggest category', 'ox.byCat':'Spending by category', 'ox.short':'spent', 'ox.empty':'Nothing recorded yet', 'ox.errAmount':'Please enter an amount', 'ox.delConfirm':'Delete this entry?', 'ap.status':'AP Status', 'ap.unpaid':'Unpaid', 'ap.partial':'Partially Paid', 'ap.paid':'Paid', 'ap.proof':'Payment proof', 'ap.amount':'Amount', 'ap.entries':'Stock-in entries', 'ap.total':'Total value', 'ap.owed':'Still owed', 'ap.settled':'Settled', 'ap.empty':'No stock-in yet', 'ap.clickHint':'Click to change', 'ap.unsaved':'Unsaved changes', 'ap.confirmTitle':'Save changes', 'ap.confirmBody':'Save {n} change(s)?', 'confirm':'Confirm', 'nav.apList':'AP', 'nav.opExpense':'Operational Expense', 'nav.cogsTracking':'COGS Tracking', 'sv.skus':'Products', 'sv.units':'Units on hand', 'sv.atCost':'Value at cost', 'sv.atRetail':'Value at price', 'sv.potential':'Potential profit', 'sv.margin':'Margin', 'sv.byCat':'Value by category', 'sv.byOrigin':'Value by origin', 'sv.top':'Biggest holdings', 'sv.topHint':'Where most of the money is tied up (top 5)', 'sv.onHand':'On hand', 'sv.avgCost':'Cost/unit', 'sv.empty':'Nothing in stock', 'nav.stockValue':'Stock Valuation', 'cogs.pfee':'Platform fee', 'cogs.dfee':'Delivery fee', 'cogs.commission':'Commission', 'cogs.netProfit':'Profit after fees', 'comm.payout':'Payout model', 'comm.pool':'Split evenly', 'comm.person':'Per salesperson', 'comm.payoutHint':'Applies to employees with the Salesperson role type', 'comm.sellerCount':'Salespeople right now', 'comm.base':'Calculation base', 'comm.baseGoods':'Goods only', 'comm.baseGoodsShip':'Goods + shipping', 'comm.rates':'Rate per product category', 'comm.profitBase':'Calculated on PROFIT (revenue − cost − discounts − platform fee), not turnover · loss-making lines pay nothing', 'comm.ratesHint':'Defaults to 5% for every category', 'comm.noCats':'No product categories yet', 'cogs.top':'Top 10 products by profit', 'cogs.topHint':'Gross profit per product (bill-level platform/delivery/commission fees are excluded — they belong to the bill, not a product)', 'cogs.sold':'Sold (units)', 'cogs.perBill':'Per bill', 'cogs.bills':'Bills', 'cogs.revenue':'Revenue (excl. VAT)', 'cogs.total':'Total COGS', 'cogs.profit':'Gross profit', 'cogs.margin':'Margin', 'cogs.byCat':'Cost by product category', 'cogs.byOrigin':'Cost by origin', 'cogs.byStatus':'Cost: paid vs unpaid', 'cogs.paid':'Paid', 'cogs.unpaid':'Unpaid', 'cogs.short':'cost', 'cogs.barHint':'Cost sitting in unpaid bills = money already spent but not yet recovered', 'cogs.missing':'{n} line(s) have no cost lot selected — the cost shown may be understated', 'inv.byStatus':'By invoice status', 'inv.bills':'bills', 'inv.billed':'Total billed', 'inv.received':'Received so far', 'inv.unpaid':'Unpaid bills', 'inv.empty':'Nothing outstanding', 'nav.orderHistory':'Edit History', 'eh.record':'Record', 'eh.changes':'Changes', 'eh.lastAction':'Latest', 'eh.lastEdited':'Last edited', 'eh.when':'When', 'eh.by':'By', 'eh.action':'Action', 'eh.viewRaw':'View raw', 'eh.back':'Back', 'eh.empty':'No history yet', 'eh.rawTitle':'Snapshot (raw)', 'eh.create':'Created', 'eh.edit':'Edited', 'eh.delete':'Deleted', 'eh.imgChanges':'Image changes', 'eh.imgAdded':'Added', 'eh.imgRemoved':'Removed', 'eh.imgNoName':'(file name unknown)', 'eh.old':'Old', 'eh.new':'New', 'eh.viewDetail':'View detail', 'eh.items':'Items', 'eh.note':'Note', 'del.empty':'No deliveries yet', 'set.deliveryStatuses':'Delivery Statuses', 'set.shippingTypes':'Shipping Type', 'set.outsources':'Outsource providers', 'set.regionMode':'Region Grouping', 'nav.grouping':'Grouping', 'nav.shippingCost':'Shipping Cost', 'nav.deliveryList':'Delivery List', 'nav.deliveryBoard':'Delivery Status', 'nav.deliveryCalendar':'Calendar', 'cal.driverType':'Driver Type', 'cal.driver':'Driver', 'cal.allTypes':'All types', 'cal.allDrivers':'All drivers', 'cal.today':'Today', 'cal.unscheduled':'{n} unscheduled', 'cal.colorBy':'Color by', 'cal.byStatus':'Status', 'cal.byType':'Driver Type', 'cal.byDriver':'Driver', 'nav.deliveryDrivers':'Drivers', 'drv.title':'Driver colours', 'drv.desc':'Set a colour per driver — used in the calendar when colouring by driver', 'drv.our':'Our Driver', 'drv.outsource':'Outsource', 'drv.empty':'No drivers yet (add Delivery Driver employees or Outsources first)', 'set.shipCost':'Shipping Cost', 'set.shipCategory':'Product category', 'set.shipCostDesc':'Set shipping prices — by region (4/6) or per province', 'set.shipMode':'Pricing mode', 'set.shipByProvince':'Per province', 'set.shipProvSwitch':'Per-province method', 'set.shipException':'Region base + exceptions', 'set.shipManual':'Every province manually', 'set.shipPickRegion':'Pick a region (to set its provinces)', 'set.shipRegionBase':'Region base price', 'set.baht':'THB', 'set.region4':'4 regions', 'set.region6':'6 regions', 'set.regionModeHint':'How provinces group into regions — affects the Region column/filter in Delivery and the map colours (derived from province code, no duplicate data).',
+      'rev.invoiceNo': 'Invoice #', 'col.lastEdited':'Last edited', 'rev.customer': 'Recipient', 'rev.customerHint': 'Recipient full name', 'rev.back':'Back', 'rev.mapHint':'Or pick a province on the map', 'rev.selProvince':'Selected province', 'rev.noProvince':'No province selected', 'region.north':'North', 'region.central':'Central', 'region.northeast':'Northeast', 'region.east':'East', 'region.west':'West', 'region.south':'South', 'rev.address': 'Recipient address', 'rev.addressHint': 'Shipping address', 'rev.addrLine':'Address (no./soi/road)', 'rev.addrLineHint':'House no., moo, soi, road', 'rev.province':'Province', 'rev.district':'District', 'rev.subdistrict':'Subdistrict', 'rev.postal':'Postal code', 'rev.postalHint':'Auto', 'rev.loading':'Loading...', 'rev.errAddrLine':'Please enter the address line', 'rev.errAddrGeo':'Please select province/district/subdistrict', 'rev.platform': 'Sold via Platform', 'rev.platformHint': 'e.g. TikTok Shop', 'sec.delivery':'Delivery', 'sec.inventory':'Inventory', 'rev.phone':'Phone', 'rev.phoneHint':'Contact phone', 'rev.shippingTitle':'Shipping', 'rev.shippingCost':'Shipping', 'rev.shippingOverride':'Override shipping (manual)', 'rev.shipAuto':'Auto', 'rev.shipNoCat':'No products/categories yet', 'rev.discountsTitle':'Discounts', 'rev.itemDiscount':'Item Discount', 'rev.shippingDiscount':'Shipping Discount', 'rev.overallDiscount':'Overall Discount', 'rev.totalDiscount':'Total Discount', 'rev.deliveryMethod':'Delivery Method', 'rev.responsible':'Responsible', 'rev.pickResp':'— select —', 'rev.respHint':'Enter responsible', 'rev.proofLabel':'Delivery proof (Outsource)', 'rev.proofPick':'Attach file', 'rev.proofAttached':'Attached', 'rev.proofNone':'No file', 'rev.items': 'Items', 'del.allProvinces':'All provinces', 'del.allRegions':'All regions', 'del.allStatuses':'All statuses', 'del.orderNo':'Order #', 'del.recipient':'Recipient', 'del.province':'Province', 'del.region':'Region', 'del.address':'Address', 'del.status':'Delivery status', 'del.shipType':'Shipping Type', 'del.responsible':'Responsible', 'del.proof':'Proof', 'del.verified':'Verified', 'del.deliveryDate':'Delivery Date', 'nav.productHistory':'Edit History', 'nav.orderHistory':'Edit History', 'eh.record':'Record', 'eh.changes':'Changes', 'eh.lastAction':'Latest', 'eh.lastEdited':'Last edited', 'eh.when':'When', 'eh.by':'By', 'eh.action':'Action', 'eh.viewRaw':'View raw', 'eh.back':'Back', 'eh.empty':'No history yet', 'eh.rawTitle':'Snapshot (raw)', 'eh.create':'Created', 'eh.edit':'Edited', 'eh.delete':'Deleted', 'eh.imgChanges':'Image changes', 'eh.imgAdded':'Added', 'eh.imgRemoved':'Removed', 'eh.imgNoName':'(file name unknown)', 'eh.old':'Old', 'eh.new':'New', 'eh.viewDetail':'View detail', 'eh.items':'Items', 'eh.note':'Note', 'del.empty':'No deliveries yet', 'set.deliveryStatuses':'Delivery Statuses', 'set.shippingTypes':'Shipping Type', 'set.outsources':'Outsource providers', 'set.regionMode':'Region Grouping', 'nav.grouping':'Grouping', 'nav.shippingCost':'Shipping Cost', 'nav.deliveryList':'Delivery List', 'nav.deliveryBoard':'Delivery Status', 'nav.deliveryCalendar':'Calendar', 'cal.driverType':'Driver Type', 'cal.driver':'Driver', 'cal.allTypes':'All types', 'cal.allDrivers':'All drivers', 'cal.today':'Today', 'cal.unscheduled':'{n} unscheduled', 'cal.colorBy':'Color by', 'cal.byStatus':'Status', 'cal.byType':'Driver Type', 'cal.byDriver':'Driver', 'nav.deliveryDrivers':'Drivers', 'drv.title':'Driver colours', 'drv.desc':'Set a colour per driver — used in the calendar when colouring by driver', 'drv.our':'Our Driver', 'drv.outsource':'Outsource', 'drv.empty':'No drivers yet (add Delivery Driver employees or Outsources first)', 'set.shipCost':'Shipping Cost', 'set.shipCategory':'Product category', 'set.shipCostDesc':'Set shipping prices — by region (4/6) or per province', 'set.shipMode':'Pricing mode', 'set.shipByProvince':'Per province', 'set.shipProvSwitch':'Per-province method', 'set.shipException':'Region base + exceptions', 'set.shipManual':'Every province manually', 'set.shipPickRegion':'Pick a region (to set its provinces)', 'set.shipRegionBase':'Region base price', 'set.baht':'THB', 'set.region4':'4 regions', 'set.region6':'6 regions', 'set.regionModeHint':'How provinces group into regions — affects the Region column/filter in Delivery and the map colours (derived from province code, no duplicate data).',
       'rev.orderStatus': 'Order Status', 'rev.invoiceStatus': 'Invoice Status', 'rev.totalRows': 'Total',
       'rev.empty': 'No orders yet — add your first order', 'rev.delConfirm': 'Delete this order?',
       'rev.addItem': '+ Add item', 'rev.itemName': 'Product name', 'rev.itemProduct': 'Product', 'rev.itemQty': 'Qty', 'rev.itemDisc': 'Disc', 'rev.itemNet': 'Net', 'rev.itemPrice': 'Price', 'rev.itemsTotal': 'Items total',
@@ -5512,7 +3959,7 @@
       'io.csvExportLabel': 'Or export a single table as CSV (opens in Excel):', 'io.csvExp': 'Expenses CSV', 'io.csvOrd': 'Orders CSV', 'io.csvProd': 'Products CSV',
       'io.importNote': '⚠️ CSV import works for Expenses and Products only (new id=create · existing id=update · action=delete to remove) — Orders can only be imported via JSON (items bind to product IDs)',
       'io.csvDone': 'Imported {t} — created {c} · updated {u} · deleted {d}', 'io.tbl_expenses': 'Expenses', 'io.tbl_products': 'Products', 'prod.addTitle': 'Add product', 'prod.editTitle': 'Edit product',
-      'img.max5':'Up to 5 images', 'pc.pickColor':'\u2014 pick a colour \u2014', 'rev.pickColorFirst':'Pick a colour first to choose its cost lots', 'rev.errPickColor':'Please pick a colour for {p}', 'pc.noColor':'No colour', 'pc.colorLabel':'Colour', 'prod.desc':'Product description', 'prod.descPh':'Details, material, size, care instructions, etc.', 'pc.section':'Colour options', 'pc.enable':'This product comes in colours', 'pc.add':'+ Add colour', 'pc.namePh':'Colour name', 'pc.image':'Image for this colour', 'pc.rmImage':'Remove image', 'prod.tagAuto':'Set automatically from the remaining stock', 'prod.image': 'Image', 'sec.detail':'Product Detail', 'sec.cost':'Cost', 'sec.selling':'Selling', 'sec.evidence':'Evidence', 'sec.product':'Product', 'sec.order':'Order', 'sec.customer':'Customer', 'prod.bill':'Purchase bill', 'bill.tooBig':'File exceeds 256KB', 'prod.sku': 'SKU', 'prod.name': 'Product name', 'prod.cost': 'Cost', 'prod.price': 'Price',
+      'img.max5':'Up to 5 images', 'pc.pickColor':'\u2014 pick a colour \u2014', 'rev.pickColorFirst':'Pick a colour first to choose its cost lots', 'rev.errPickColor':'Please pick a colour for {p}', 'pc.noColor':'No colour', 'pc.colorLabel':'Colour', 'prod.desc':'Product description', 'prod.descPh':'Details, material, size, care instructions, etc.', 'pc.section':'Colour options', 'pc.enable':'This product comes in colours', 'pc.add':'+ Add colour', 'pc.namePh':'Colour name', 'pc.image':'Image for this colour', 'pc.rmImage':'Remove image', 'prod.image': 'Image', 'sec.detail':'Product Detail', 'sec.cost':'Cost', 'sec.selling':'Selling', 'sec.evidence':'Evidence', 'sec.product':'Product', 'sec.order':'Order', 'sec.customer':'Customer', 'prod.bill':'Purchase bill', 'bill.tooBig':'File exceeds 256KB', 'prod.sku': 'SKU', 'prod.name': 'Product name', 'prod.cost': 'Cost', 'prod.price': 'Price',
       'prod.sale': 'Sale',
       'promo.btn': 'Promotion', 'promo.navLabel': 'Promotion',
       'promo.title': 'Manage Promotions', 'promo.desc': 'Schedule discounts by category/product · items go on sale automatically during the window and stop when it ends (checked on app open)',
@@ -5545,15 +3992,15 @@
       'bp.logo': 'Logo', 'bp.signature': 'Signature', 'bp.stamp': 'Stamp', 'bp.vatDefault': 'Default: calculate VAT 7%', 'bp.remove': 'Remove image',
       'doc.rv.title': 'Receipt Voucher', 'doc.optsDesc': 'Pick options, then print / save as PDF.',
       'doc.bn.title': 'Billing Note', 'doc.rc.title': 'Receipt', 'doc.makeTitle': 'Generate document',
-      'doc.billTo': 'Bill to', 'doc.biller': 'Seller signature', 'doc.billReceiver': 'Received by signature',
+      'doc.billTo': 'Bill to', 'doc.biller': 'Biller signature', 'doc.billReceiver': 'Received by signature',
       'doc.st.received': 'Received in full and in order.', 'doc.st.pleasePay': 'Please pay the grand total above.',
-      'doc.noProfile': '⚠ No business profile set in Settings — the document will have no header.', 'doc.reference':'Reference', 'doc.createdBy':'Created by', 'doc.custTaxId':'Tax ID', 'doc.custPhone':'Tel.', 'doc.col.code':'Code', 'doc.taxCustomer':'Buyer details (for the tax invoice)', 'doc.taxCustomerHint':'These replace the recipient block on the document · they are remembered for next time', 'doc.custCompany':'Customer company name', 'doc.custAddress':'Customer company address', 'doc.dp.title':'Deposit Receipt', 'doc.dp.disabled':'Available only while a balance is outstanding', 'doc.dp.paid':'Deposit received', 'doc.dp.balance':'Balance due', 'doc.st.deposit':'Deposit received with thanks', 'doc.tx.title':'Tax Invoice', 'doc.vatCalc':'This bill is charged VAT 7%', 'doc.splitHint':'This layout belongs to the bill — with a separate shipping document, shipping is outside the VAT base and NET updates immediately', 'doc.splitShort':'split', 'doc.payFromOrder':'Payment method (from the bill)', 'eh.billDetails':'Bill details', 'doc.splitMode':'Document layout', 'doc.splitTogether':'Goods + shipping together', 'doc.splitApart':'Separate documents', 'doc.makeGoods':'Goods document', 'doc.makeShip':'Shipping document', 'doc.goodsOnly':'goods only', 'doc.shipOnly':'shipping only', 'doc.taxId':'Tax ID', 'bp.branch':'Branch', 'bp.branchDefault':'Head Office', 'pay.vatNo':'No VAT', 'doc.vat': 'Calculate VAT 7% (VAT-inclusive)',
+      'doc.noProfile': '⚠ No business profile set in Settings — the document will have no header.', 'doc.vat': 'Calculate VAT 7% (VAT-inclusive)',
       'doc.payMethod': 'Payment method', 'doc.pay.cash': 'Cash', 'doc.pay.transfer': 'Bank transfer', 'doc.pay.other': 'Other',
       'doc.make': 'Generate', 'doc.popupBlocked': 'Popup blocked — please allow popups and try again.', 'doc.print': 'Print / Save PDF',
       'doc.yourStore': '(Your store name)', 'doc.no': 'No.', 'doc.date': 'Date', 'doc.receivedFrom': 'Received from', 'doc.ref': 'Ref.',
       'doc.col.no': 'No.', 'doc.col.item': 'Description', 'doc.col.qty': 'Qty', 'doc.col.unit': 'Unit price', 'doc.col.amount': 'Amount',
       'doc.subtotal': 'Subtotal', 'doc.discount': 'Discount', 'doc.shipping':'Shipping', 'doc.itemDiscount':'Item Discount', 'doc.shipDiscount':'Shipping Discount', 'doc.overallDiscount':'Overall Discount', 'doc.totalDiscount':'Total Discount', 'doc.showDiscounts':'Show discounts', 'doc.discItem':'Item', 'doc.discShip':'Shipping', 'doc.discOverall':'Overall', 'doc.language':'Document language', 'doc.langTh':'Thai', 'doc.langEn':'English', 'doc.beforeVat': 'Before VAT', 'doc.vat7': 'VAT 7%', 'doc.grand': 'Grand total',
-      'doc.amountWords': 'Amount in words', 'doc.payer': 'Payer signature', 'doc.payee': 'Seller signature', 'doc.footNote': 'Issued from Simple Store',
+      'doc.amountWords': 'Amount in words', 'doc.payer': 'Payer signature', 'doc.payee': 'Payee signature', 'doc.footNote': 'Issued from Simple Store',
       'nav.account': 'Monthly Report', 'nav.deleted':'Deleted List', 'bin.desc':'Deleted records are excluded from every total until they are restored', 'bin.products':'Deleted products', 'bin.orders':'Deleted bills', 'bin.restore':'Restore', 'bin.confirm':'Restore this record back into the books?', 'bin.qty':'Qty held', 'bin.lotValue':'Cost value', 'bin.expenses':'Expenses held', 'bin.deletedBy':'Deleted by', 'bin.empty':'Nothing here', 'acct.cogs':'COGS', 'acct.profit':'Profit', 'nav.vat':'VAT Calculation', 'vat.base':'Before VAT', 'vat.amount':'VAT 7%', 'vat.totalNet':'Total', 'vat.totalBase':'Total before VAT', 'vat.totalVat':'Total VAT', 'nav.ledger': 'Ledger', 'acct.summary': 'Summary', 'acct.table': 'Table', 'acct.monthlyTitle': 'Monthly income & expense',
       'acct.year': 'Year', 'acct.month': 'Month', 'acct.income': 'Income', 'acct.expense': 'Expense', 'acct.net': 'Net', 'acct.yearNet': 'Year net',
       'acct.vatMode': 'VAT calculation', 'acct.vatAll': 'VAT on all', 'acct.vatTicked': 'Only ticked items', 'acct.vatNone': 'No VAT',
