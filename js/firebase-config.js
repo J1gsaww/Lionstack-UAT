@@ -1,110 +1,223 @@
-// ============================================================
-// FIREBASE CONFIG + DATA LAYER BOOT
-//
-// Loaded (as a module) BEFORE app.js. It initialises Firestore,
-// then hydrates an in-memory cache (window.__ssCache) from the
-// `appdata` collection so the Base App's synchronous Store.getRaw
-// keeps working. app.js awaits window.__storeReady before it reads
-// anything.
-//
-// Data model: one document per storage key under collection
-// `appdata`, shape { v: <json string> } — a direct mirror of the
-// old localStorage (key -> JSON string). The async module face
-// (Store.get/list/set) is unchanged because it still wraps getRaw/
-// setRaw, which now read/write the cache + Firestore.
-//
-// Safety: if Firebase fails to init or hydrate, we fall back to
-// localStorage so the app still runs. On first run, if Firestore is
-// empty but localStorage has data, that data is migrated up so no
-// local test data is lost.
-// ============================================================
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
-import {
-  getFirestore, collection, getDocs, doc, setDoc, deleteDoc
-} from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
-import { getAuth } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-auth.js";
+/* ============================================================================
+ * Firebase data layer.
+ *
+ * The app never talks to Firestore directly — js/app/core/store.js reads and
+ * writes through a few globals, and this file fills them in:
+ *
+ *   window.__ssBackend  'firestore' once we are live
+ *   window.__ssCache    { storageKey: rawJsonString }  — read synchronously
+ *   window.__ssPersist  (key, rawStringOrNull) => void — write, fire and forget
+ *   window.__storeReady  promise awaited by main.js before the first render
+ *   window.__hydrateStore()  re-read everything (auth.js calls it after sign-in)
+ *   window.firebaseAuth  the Auth instance auth.js signs in against
+ *
+ * Storage shape: collection `appdata`, one document per storage key, field `v`
+ * holding the JSON string. shop.html reads the same documents directly.
+ *
+ * EVERYTHING GOES TO FIREBASE. The only things that stay on the device are the
+ * three personal preferences store.js keeps in LOCAL_ONLY_KEYS (language,
+ * light/dark, ink colour) — those are per-employee, not shop data.
+ *
+ * A write is therefore never allowed to fail quietly:
+ *   • Firestore keeps its own durable queue (persistent local cache), so a write
+ *     made offline is sent as soon as the connection returns — even after a
+ *     reload.
+ *   • On top of that this file retries with backoff, keeps whatever still fails
+ *     in a retry list, shows a visible status pill, and warns before the tab is
+ *     closed while anything is unsaved.
+ *   • If Firebase cannot start at all it does NOT pretend to work: the app is
+ *     put in read-only mode with a red banner, because writing to localStorage
+ *     instead would silently split the data across devices.
+ *
+ * Documents are capped at 1 MiB by Firestore and this app stores base64 images
+ * inline, so a big value is SPLIT across `v0..vN` with `parts` saying how many.
+ * ==========================================================================*/
 
-const firebaseConfig = {
-  apiKey: "AIzaSyBBfEBrzJZ0k_U4Ch7Iis1mKpkbEFTO-KI",
-  authDomain: "my-base-b5936.firebaseapp.com",
-  projectId: "my-base-b5936",
-  storageBucket: "my-base-b5936.firebasestorage.app",
-  messagingSenderId: "125519649834",
-  appId: "1:125519649834:web:2c292278b20f0f89d0f753",
-  measurementId: "G-YPL8KJNC6Z"
-};
+const SDK = 'https://www.gstatic.com/firebasejs/10.12.2/';
+const CHUNK = 700000;              // ~700KB of JSON per field, under the 1MiB doc cap
+const MAX_TRIES = 5;
 
-const COL = 'appdata';
-// Firestore document ids can't contain '/'. Our keys don't today, but encode
-// defensively so a future key with a slash can't break.
-const encodeKey = (k)=> k.replace(/\//g, '__SL__');
-const decodeKey = (id)=> id.replace(/__SL__/g, '/');
+window.__ssBackend = 'local';
+window.__ssCache = window.__ssCache || {};
 
-window.__ssCache = {};        // key -> raw JSON string (mirrors old localStorage)
-window.__ssBackend = 'local'; // 'firestore' once hydrated; 'local' = fallback
-
-// Sensible no-ops for local mode; overwritten below when APP_MODE === 'firebase'.
-window.__ssPersist = ()=>{};
-window.__hydrateStore = async ()=>{};
-window.__storeReady = Promise.resolve();
-
-// ---- Local dev mode: don't touch Firebase at all. Store runs on localStorage,
-// auth.js enters the app directly. Flip window.APP_MODE (js/env.js) to 'firebase'
-// to activate everything below. ----
-if(window.APP_MODE !== 'firebase'){
-  console.info('[env] local mode — Firebase disabled, using localStorage');
-}else{
-
-let db = null;
-try{
-  const app = initializeApp(firebaseConfig);
-  db = getFirestore(app);
-  window.firebaseDb = db;
-  window.firebaseAuth = getAuth(app);
-}catch(e){
-  console.error('Firebase init failed — staying on localStorage', e);
-}
-
-// Write-through: persist one key to Firestore (value=string) or delete (null).
-// Fire-and-forget; failures are logged but never block the UI.
-window.__ssPersist = function(key, value){
-  if(!db || window.__ssBackend !== 'firestore') return;
-  const ref = doc(db, COL, encodeKey(key));
-  const p = (value == null) ? deleteDoc(ref) : setDoc(ref, { v: value });
-  p.catch(e=> console.error('Firestore write failed:', key, e));
-};
-
-window.__storeReady = new Promise(res=>{ window.__storeReadyResolve = res; });
-
-// Hydrate the cache from Firestore. Called AFTER the owner signs in (auth.js),
-// because locked Security Rules require an authenticated user to read the full
-// collection. Safe to call more than once; resolves window.__storeReady.
-window.__hydrateStore = async function(){
-  if(!db){ window.__storeReadyResolve(); return; }   // stay on localStorage fallback
-  try{
-    const snap = await getDocs(collection(db, COL));
-    snap.forEach(d=>{
-      const data = d.data();
-      if(data && typeof data.v !== 'undefined') window.__ssCache[decodeKey(d.id)] = data.v;
-    });
-    window.__ssBackend = 'firestore';
-    // First run on Firestore: seed from any existing localStorage test data.
-    if(snap.empty){
-      try{
-        for(let i = 0; i < localStorage.length; i++){
-          const k = localStorage.key(i);
-          if(k == null) continue;
-          const v = localStorage.getItem(k);
-          window.__ssCache[k] = v;
-          window.__ssPersist(k, v);
-        }
-      }catch(e){ console.error('localStorage → Firestore seed failed', e); }
-    }
-  }catch(e){
-    console.error('Firestore hydrate failed — falling back to localStorage', e);
-    window.__ssBackend = 'local';
+/* ---------------- status pill + banner (only in firebase mode) ------------- */
+function ui(){
+  let el = document.getElementById('fbStatus');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'fbStatus';
+    el.className = 'fb-status';
+    el.style.display = 'none';
+    (document.body || document.documentElement).appendChild(el);
   }
-  window.__storeReadyResolve();
-};
+  return el;
+}
+function setStatus(state, text, onRetry){
+  const el = ui();
+  el.className = 'fb-status fb-' + state;
+  el.style.display = '';
+  el.innerHTML = '<span class="fb-dot"></span><span class="fb-text"></span>' +
+    (onRetry ? '<button type="button" class="fb-retry">Retry</button>' : '');
+  el.querySelector('.fb-text').textContent = text;
+  const btn = el.querySelector('.fb-retry');
+  if(btn) btn.addEventListener('click', onRetry);
+}
+function clearStatus(){ const el = document.getElementById('fbStatus'); if(el) el.style.display = 'none'; }
 
-}   // end: if(window.APP_MODE === 'firebase')
+if(window.APP_MODE !== 'firebase' || !window.FIREBASE_CONFIG){
+  // Local development: nothing to do, resolve so main.js proceeds.
+  window.__storeReady = Promise.resolve();
+  window.__hydrateStore = async ()=>{};
+}else{
+  let db = null, fsMod = null, ready = null;
+  const pending = new Map();   // key -> latest value waiting for its debounce
+  const timers  = new Map();
+  const failed  = new Map();   // key -> value that exhausted its retries
+  let inFlight = 0;
+
+  const sleep = (ms)=> new Promise(r=> setTimeout(r, ms));
+  const joinParts = (data)=>{
+    if(!data) return null;
+    if(typeof data.parts === 'number' && data.parts > 0){
+      let out = '';
+      for(let i = 0; i < data.parts; i++) out += (data['v' + i] || '');
+      return out;
+    }
+    return (typeof data.v === 'undefined') ? null : data.v;
+  };
+
+  function paint(){
+    if(failed.size){
+      setStatus('bad', 'ยังบันทึกขึ้น Firebase ไม่สำเร็จ ' + failed.size + ' รายการ', retryFailed);
+      return;
+    }
+    if(inFlight || pending.size){ setStatus('busy', 'กำลังบันทึก…'); return; }
+    clearStatus();
+  }
+
+  async function boot(){
+    const [{ initializeApp }, fs, authMod] = await Promise.all([
+      import(SDK + 'firebase-app.js'),
+      import(SDK + 'firebase-firestore.js'),
+      import(SDK + 'firebase-auth.js')
+    ]);
+    const app = initializeApp(window.FIREBASE_CONFIG);
+    // Persistent cache = Firestore keeps unsent writes on disk and replays them
+    // after a reload, which is what makes "offline for a while" survivable.
+    try{
+      db = fs.initializeFirestore(app, {
+        localCache: fs.persistentLocalCache({ tabManager: fs.persistentMultipleTabManager() })
+      });
+    }catch(e){
+      console.warn('[firebase] persistent cache unavailable, using memory cache', e);
+      db = fs.getFirestore(app);
+    }
+    fsMod = fs;
+    window.__fs = fs;
+    window.firebaseAuth = authMod.getAuth(app);
+    window.__ssBackend = 'firestore';
+  }
+
+  window.__hydrateStore = async function(){
+    try{
+      if(!db) await ready;
+      if(!db) return;
+      const snap = await fsMod.getDocs(fsMod.collection(db, 'appdata'));
+      const next = {};
+      snap.forEach(d=>{
+        const raw = joinParts(d.data());
+        if(raw != null) next[d.id] = raw;
+      });
+      // Replace in place — store.js holds a reference to this object.
+      Object.keys(window.__ssCache).forEach(k=> delete window.__ssCache[k]);
+      Object.assign(window.__ssCache, next);
+      console.info('[firebase] hydrated ' + Object.keys(next).length + ' keys');
+    }catch(e){
+      console.error('[firebase] hydrate failed', e);
+      setStatus('bad', 'อ่านข้อมูลจาก Firebase ไม่สำเร็จ — ลองรีเฟรช', ()=> location.reload());
+    }
+  };
+
+  async function writeOnce(key, value){
+    const ref = fsMod.doc(db, 'appdata', key);
+    if(value === null){ await fsMod.deleteDoc(ref); return; }
+    if(value.length <= CHUNK){
+      await fsMod.setDoc(ref, { v: value, parts: 0, at: Date.now() });
+      return;
+    }
+    const payload = { parts: Math.ceil(value.length / CHUNK), v: '', at: Date.now() };
+    for(let i = 0; i < payload.parts; i++) payload['v' + i] = value.slice(i * CHUNK, (i + 1) * CHUNK);
+    await fsMod.setDoc(ref, payload);
+  }
+
+  async function push(key, value){
+    inFlight++; paint();
+    for(let attempt = 1; attempt <= MAX_TRIES; attempt++){
+      try{
+        if(!db) await ready;
+        await writeOnce(key, value);
+        failed.delete(key);
+        inFlight--; paint();
+        return true;
+      }catch(e){
+        if(attempt === MAX_TRIES){
+          console.error('[firebase] save failed for ' + key, e);
+          failed.set(key, value);
+          if(typeof window.logAppError === 'function') window.logAppError('บันทึกขึ้น Firebase ไม่สำเร็จ: ' + key, e);
+          inFlight--; paint();
+          return false;
+        }
+        await sleep(400 * Math.pow(2, attempt));   // 0.8s, 1.6s, 3.2s, 6.4s
+      }
+    }
+  }
+
+  async function retryFailed(){
+    const items = [...failed.entries()];
+    failed.clear(); paint();
+    for(const [k, v] of items) await push(k, v);
+  }
+
+  function flush(key){
+    timers.delete(key);
+    if(!pending.has(key)) return;
+    const value = pending.get(key);
+    pending.delete(key);
+    push(key, value);
+  }
+
+  window.__ssPersist = function(key, value){
+    if(window.__fbReadOnly){                      // never accept a write we can't send
+      setStatus('bad', 'ยังไม่ได้เชื่อม Firebase — ข้อมูลจะไม่ถูกบันทึก', ()=> location.reload());
+      return;
+    }
+    pending.set(key, value);
+    paint();
+    if(timers.has(key)) clearTimeout(timers.get(key));
+    timers.set(key, setTimeout(()=> flush(key), 400));
+  };
+
+  // Anything still in the debounce window goes out immediately; if something is
+  // genuinely unsaved, say so instead of losing it silently.
+  window.addEventListener('beforeunload', (e)=>{
+    timers.forEach((t, k)=>{ clearTimeout(t); flush(k); });
+    if(failed.size || inFlight || pending.size){
+      e.preventDefault();
+      e.returnValue = '';
+      return '';
+    }
+  });
+  window.addEventListener('online', ()=>{ if(failed.size) retryFailed(); });
+  setInterval(()=>{ if(failed.size) retryFailed(); }, 30000);
+
+  ready = boot().catch(e=>{
+    // No silent fallback to localStorage: that would hide the shop's data on one
+    // machine and look like it worked.
+    console.error('[firebase] init failed', e);
+    window.__fbReadOnly = true;
+    window.__ssBackend = 'local';
+    const show = ()=> setStatus('bad', 'เชื่อม Firebase ไม่ได้ — ห้ามบันทึกข้อมูลจนกว่าจะเชื่อมได้', ()=> location.reload());
+    if(document.body) show(); else document.addEventListener('DOMContentLoaded', show);
+  });
+  window.__storeReady = ready;
+}

@@ -52,7 +52,17 @@ if(window.APP_MODE === 'firebase'){
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
     const snaps = await Promise.all(PUBLIC_KEYS.map(k=> getDoc(doc(db, 'appdata', k)).catch(()=> null)));
-    snaps.forEach((s, i)=>{ if(s && s.exists()){ const data = s.data(); if(data && typeof data.v !== 'undefined') SS[PUBLIC_KEYS[i]] = data.v; } });
+    // Large values are split across v0..vN by the back office — reassemble them.
+    const joinParts = (data)=>{
+      if(!data) return null;
+      if(typeof data.parts === 'number' && data.parts > 0){
+        let out = '';
+        for(let i = 0; i < data.parts; i++) out += (data['v' + i] || '');
+        return out;
+      }
+      return (typeof data.v === 'undefined') ? null : data.v;
+    };
+    snaps.forEach((s, i)=>{ if(s && s.exists()){ const raw = joinParts(s.data()); if(raw != null) SS[PUBLIC_KEYS[i]] = raw; } });
   }catch(e){ console.error('Shop: Firebase read failed — falling back to localStorage', e); }
 }
 // Local mode: SS stays empty → read() falls through to localStorage below.

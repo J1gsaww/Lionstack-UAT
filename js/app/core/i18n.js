@@ -455,3 +455,42 @@ function applyLanguage(lang){
   showSettingTab(settingTab);
 }
 
+
+/* ============================================================================
+ * Months, in one place.
+ *
+ * Month names used to be copy-pasted into three modules, and pickers were built
+ * from hard-coded rolling windows ("last 12 months"), which broke as soon as you
+ * needed a future month or a different year. These helpers are year-agnostic:
+ * they take/return a plain 'YYYY-MM' key and format it in the current language.
+ * ==========================================================================*/
+(function(){
+  // FULL month names (the short "ม.ค. / Jan" table above is a different thing,
+  // used for compact dates — don't merge them).
+  const MONTHS_FULL = {
+    th: ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'],
+    en: ['January','February','March','April','May','June','July','August','September','October','November','December']
+  };
+  const lang = ()=> ((window.appLang && window.appLang()) === 'en') ? 'en' : 'th';
+
+  window.monthNames = ()=> MONTHS_FULL[lang()].slice();
+  window.monthKeyOf = (d)=> `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  window.thisMonthKey = ()=> window.monthKeyOf(new Date());
+  // 'YYYY-MM' -> 'กรกฎาคม 2026' / 'July 2026'. Any year, past or future.
+  window.monthLabel = (key)=>{
+    if(!key || key.length < 7) return '';
+    const m = Number(key.slice(5,7)) - 1;
+    if(m < 0 || m > 11) return key;
+    return MONTHS_FULL[lang()][m] + ' ' + key.slice(0,4);
+  };
+  // Shift a month key by n months (negative = back). Rolls over years by itself.
+  window.monthShift = (key, n)=>{
+    const d = new Date(Number(key.slice(0,4)), Number(key.slice(5,7)) - 1 + n, 1);
+    return window.monthKeyOf(d);
+  };
+  // First/last day of a month key, as ISO dates.
+  window.monthBounds = (key)=>{
+    const y = Number(key.slice(0,4)), m = Number(key.slice(5,7));
+    return { from: `${key}-01`, to: `${key}-${String(new Date(y, m, 0).getDate()).padStart(2,'0')}` };
+  };
+})();

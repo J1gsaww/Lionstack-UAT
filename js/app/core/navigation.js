@@ -99,9 +99,9 @@ function renderSidebar(){
   const NAV_CATS = [
     ['nav.cat.inventory', [ modItem('stock'), modItem('sell'), modItem('delivery'), modItem('storefront') ]],
     ['nav.cat.accounting',[ modItem('revenueAcct'), modItem('cogsInventory'), modItem('expenseAp'), modItem('financialReport') ]],
-    ['nav.cat.hr',        [ modItem('payroll'), modItem('empCalendar'), modItem('timeLeave'), modItem('benefit') ]],
+    ['nav.cat.hr',        [ modItem('payroll'), modItem('empCalendar') ]],
     ['nav.cat.org',       [ modItem('businessProfile'), modItem('employeeMgmt') ]],
-    ['nav.cat.setting',   [ pageItem('interface','nav.interface','importExport'), pageItem('setting','nav.setting','setting'), pageItem('usersetting','nav.usersetting',null), modItem('rolesAccess'), modItem('sellStockSetting'), modItem('customerDoc'), modItem('accountingSetting'), modItem('deliverySetting'), modItem('commissionSetting') ]],
+    ['nav.cat.setting',   [ modItem('importExport'), pageItem('setting','nav.setting','setting'), pageItem('usersetting','nav.usersetting',null), modItem('rolesAccess'), modItem('sellStockSetting'), modItem('customerDoc'), modItem('accountingSetting'), modItem('deliverySetting'), modItem('commissionSetting') ]],
   ];
   NAV_CATS.forEach(([titleKey, items])=>{
     const shown = items.filter(Boolean);
@@ -137,7 +137,7 @@ function renderSidebar(){
 }
 
 // Sidebar order, used to pick a landing page when the requested one is missing.
-const NAV_MODULE_ORDER = ['stock','sell','delivery','storefront','revenueAcct','cogsInventory','expenseAp','financialReport','payroll','empCalendar','timeLeave','benefit','businessProfile','employeeMgmt','customerDoc','commissionSetting','accountingSetting'];
+const NAV_MODULE_ORDER = ['importExport','stock','sell','delivery','storefront','revenueAcct','cogsInventory','expenseAp','financialReport','payroll','empCalendar','businessProfile','employeeMgmt','customerDoc','commissionSetting','accountingSetting'];
 function firstAvailableModule(){
   for(const id of NAV_MODULE_ORDER){
     const m = getModule(id);

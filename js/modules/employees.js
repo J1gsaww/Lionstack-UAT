@@ -77,18 +77,30 @@
       { id:'payroll', label:{ th:'เงินเดือน', en:'Payroll' }, subs:[
         { id:'empPayroll',     label:{ th:'เงินเดือนพนักงาน', en:'Employee Payroll' } },
         { id:'compensation',   label:{ th:'ค่าเงิน', en:'Compensation' } },
-        { id:'processPayroll', label:{ th:'ประมวลผลเงินเดือน', en:'Process Payroll' } }
+        { id:'authorizePayroll', label:{ th:'อนุมัติปิดงวดเงินเดือน', en:'Authorize Payroll' } }
       ]},
-      { id:'empCalendar', label:{ th:'ปฏิทินพนักงาน', en:'Employee Calendar' } },
-      { id:'timeLeave',   label:{ th:'เวลา & การลา', en:'Time / Leave' } },
-      { id:'benefit',     label:{ th:'สวัสดิการ', en:'Benefit' } }
+      { id:'empCalendar', label:{ th:'ปฏิทินพนักงาน', en:'Employee Calendar' } }
     ]},
     { key:'org', label:{ th:'องค์กร', en:'Organization' }, items:[
       { id:'businessProfile', label:{ th:'ข้อมูลธุรกิจ', en:'Business Profile' } },
       { id:'employeeMgmt',    label:{ th:'พนักงาน', en:'Employees' } }
     ]},
     { key:'setting', label:{ th:'ตั้งค่า', en:'Setting' }, items:[
-      { id:'importExport',      label:{ th:'นำเข้า/ส่งออก', en:'Import / Export' } },
+      { id:'importExport', label:{ th:'นำเข้า/ส่งออก', en:'Import / Export' }, subs:[
+        { id:'ieOverall',   label:{ th:'ทั้งหมด', en:'Overall' } },
+        { id:'ieStock',     label:{ th:'จัดการสต๊อก', en:'Stock' } },
+        { id:'ieSell',      label:{ th:'การขาย', en:'Sell' } },
+        { id:'ieDelivery',  label:{ th:'การจัดส่ง', en:'Delivery' } },
+        { id:'ieStorefront',label:{ th:'หน้าร้าน', en:'Storefront' } },
+        { id:'ieRevenue',   label:{ th:'รายได้ & บัญชี', en:'Revenue & Accounting' } },
+        { id:'ieCogs',      label:{ th:'ต้นทุนขาย', en:'COGS' } },
+        { id:'ieExpense',   label:{ th:'รายจ่าย & เจ้าหนี้', en:'Expense & Payable' } },
+        { id:'ieFinancial', label:{ th:'รายงานการเงิน', en:'Financial Report' } },
+        { id:'iePayroll',   label:{ th:'เงินเดือน', en:'Payroll' } },
+        { id:'ieCalendar',  label:{ th:'ปฏิทินพนักงาน', en:'Employee Calendar' } },
+        { id:'ieEmployees', label:{ th:'พนักงาน & สิทธิ์', en:'Employees & Access' } },
+        { id:'ieSetting',   label:{ th:'ตั้งค่าทั้งหมด', en:'All Settings' } }
+      ]},
       { id:'setting',           label:{ th:'ตั้งค่าระบบ', en:'Admin App Setting' } },
       { id:'rolesAccess',       label:{ th:'บทบาท & สิทธิ์', en:'Roles & Access' } },
       { id:'sellStockSetting',  label:{ th:'ตั้งค่า Sell/Stock', en:'Sell/Stock Setting' } },
