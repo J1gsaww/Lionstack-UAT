@@ -100,8 +100,17 @@ function initLocalLogin(){
   });
 }
 
-// ---- FIREBASE: real email/password (dynamic import; Developer role) ----
+// ---- FIREBASE: two stages ----------------------------------------------
+// Stage 1 — DEVICE UNLOCK: a Firebase email/password account signs the browser
+//   in so Firestore rules (request.auth != null) accept reads and writes. These
+//   accounts exist ONLY for the owner/developer; staff never get one.
+// Stage 2 — EMPLOYEE GATE: the normal in-app login. Employees are created in
+//   Employee Management, verified against their salted hash, and their ROLE
+//   comes from their employee record — exactly as in local mode.
+// The Firebase session persists in the browser, so a shop terminal is unlocked
+// once and staff simply sign in and out on top of it all day.
 function authErrorMessage(code){
+
   switch(code){
     case 'auth/invalid-email':          return 'อีเมลไม่ถูกต้องค่ะ';
     case 'auth/user-disabled':          return 'บัญชีนี้ถูกระงับการใช้งาน';
@@ -114,18 +123,117 @@ function authErrorMessage(code){
   }
 }
 
-async function initFirebaseAuth(){
-  const auth = window.firebaseAuth;
-  const loginForm = document.getElementById('loginForm');
+
+let employeeGateWired = false;
+
+function loginHint(text){
+  let el = document.getElementById('loginStageHint');
+  if(!el){
+    const form = document.getElementById('loginForm');
+    if(!form) return;
+    el = document.createElement('p');
+    el.id = 'loginStageHint';
+    el.className = 'login-hint';
+    form.insertBefore(el, form.firstChild);
+  }
+  el.textContent = text || '';
+  el.style.display = text ? '' : 'none';
+}
+
+// Stage 1: unlock the browser against Firebase.
+function stageDeviceUnlock(auth, signInWithEmailAndPassword){
+  const form   = document.getElementById('loginForm');
   const userEl = document.getElementById('loginUsername');
   const passEl = document.getElementById('loginPassword');
-  const errEl = document.getElementById('loginError');
+  const errEl  = document.getElementById('loginError');
+  const devBtn = document.getElementById('loginDevBtn');
   const showErr = (msg)=>{ if(errEl){ errEl.textContent = msg; errEl.style.display = 'block'; } };
 
+  showLogin();
+  loginHint('เข้าสู่ระบบด้วยบัญชี Firebase (สำหรับผู้ดูแล) เพื่อเชื่อมอุปกรณ์นี้กับฐานข้อมูล — ทำครั้งเดียวต่อเครื่อง');
+  if(userEl){ userEl.type = 'email'; userEl.placeholder = 'email'; }
+  if(devBtn) devBtn.style.display = 'none';       // no local dev bypass when the DB is live
+
+  if(form && !form.__fbWired){
+    form.__fbWired = true;
+    form.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      if(!window.__fbStage || window.__fbStage !== 'device') return;   // employee gate owns the form now
+      if(errEl) errEl.style.display = 'none';
+      const email = userEl ? userEl.value.trim() : '';
+      const password = passEl ? passEl.value : '';
+      if(!email || !password){ showErr('กรุณากรอก Email และ Password ให้ครบค่ะ'); return; }
+      const btn = form.querySelector('[type="submit"]');
+      if(btn) btn.disabled = true;
+      try{
+        await signInWithEmailAndPassword(auth, email, password);
+        if(passEl) passEl.value = '';
+      }catch(err){
+        showErr(authErrorMessage(err && err.code));
+      }finally{
+        if(btn) btn.disabled = false;
+      }
+    });
+  }
+  window.__fbStage = 'device';
+}
+
+// Stage 2: the ordinary employee login, with a way back out of the device session.
+function stageEmployeeGate(signOut, auth, user){
+  const userEl = document.getElementById('loginUsername');
+  const devBtn = document.getElementById('loginDevBtn');
+  window.__fbStage = 'employee';
+  if(userEl){ userEl.type = 'text'; userEl.placeholder = 'username'; }
+  if(devBtn){
+    devBtn.style.display = '';
+    // In firebase mode the Dev role belongs to whoever unlocked the device.
+    devBtn.textContent = user && user.email ? ('Developer \u00B7 ' + user.email) : 'Dev Login';
+  }
+  loginHint('อุปกรณ์นี้เชื่อมกับฐานข้อมูลแล้ว — เข้าสู่ระบบด้วย ID พนักงานของคุณ');
+
+  if(!employeeGateWired){
+    employeeGateWired = true;
+    initLocalLogin();                       // same gate, same roles, same hashes
+
+    // Leaving the device entirely (ends the Firebase session too).
+    const form = document.getElementById('loginForm');
+    if(form && !document.getElementById('loginSignOutDevice')){
+      const link = document.createElement('button');
+      link.type = 'button';
+      link.id = 'loginSignOutDevice';
+      link.className = 'btn btn-ghost';
+      link.style.cssText = 'width:100%; margin-top:8px; font-size:12px; opacity:0.8;';
+      link.textContent = 'ออกจากอุปกรณ์นี้ (Firebase)';
+      link.addEventListener('click', async ()=>{
+        try{ await signOut(auth); }catch(e){ console.error('signOut failed', e); }
+        location.reload();
+      });
+      form.appendChild(link);
+    }
+  }else{
+    showLogin();
+  }
+}
+
+function fbFatal(msg){
+  const errEl = document.getElementById('loginError');
+  showLogin();
+  loginHint('');
+  if(errEl){ errEl.textContent = msg; errEl.style.display = 'block'; }
+  const form = document.getElementById('loginForm');
+  if(form) form.querySelectorAll('input,button').forEach(el=> el.disabled = true);
+}
+
+async function initFirebaseAuth(){
+  // firebase-config.js boots asynchronously; without this the check below runs
+  // first and every load looks like "Firebase unavailable".
+  try{ if(window.__storeReady) await window.__storeReady; }catch(e){}
+  const auth = window.firebaseAuth;
+
   if(!auth){
-    console.warn('[auth] Firebase unavailable — falling back to local login');
-    if(window.__hydrateStore) await window.__hydrateStore();
-    initLocalLogin();
+    // Deliberately NO fallback to the local gate: writes would go nowhere.
+    console.error('[auth] Firebase auth unavailable');
+    fbFatal('เชื่อมต่อ Firebase ไม่ได้ — รีเฟรชหน้าอีกครั้ง หรือตรวจอินเทอร์เน็ตก่อนใช้งาน');
     return;
   }
 
@@ -134,36 +242,12 @@ async function initFirebaseAuth(){
 
   onAuthStateChanged(auth, async (user)=>{
     if(user){
-      if(window.__hydrateStore) await window.__hydrateStore();
-      window.currentRole = 'developer';   // a real Firebase sign-in = Developer
-      window.currentEmployee = { username: user.email || 'dev', roleKey: 'developer' };
-      enterApp(user.email || 'Developer');
+      if(window.__hydrateStore) await window.__hydrateStore();   // rules need the session
+      stageEmployeeGate(signOut, auth, user);
     }else{
-      showLogin();
+      stageDeviceUnlock(auth, signInWithEmailAndPassword);
     }
   });
-
-  if(loginForm){
-    loginForm.addEventListener('submit', async (e)=>{
-      e.preventDefault();
-      if(errEl) errEl.style.display = 'none';
-      const email = userEl ? userEl.value.trim() : '';
-      const password = passEl ? passEl.value : '';
-      if(!email || !password){ showErr('กรุณากรอก Email และ Password ให้ครบค่ะ'); return; }
-      const submitBtn = loginForm.querySelector('[type="submit"]');
-      if(submitBtn) submitBtn.disabled = true;
-      try{
-        await signInWithEmailAndPassword(auth, email, password);
-        if(passEl) passEl.value = '';
-      }catch(err){
-        showErr(authErrorMessage(err && err.code));
-      }finally{
-        if(submitBtn) submitBtn.disabled = false;
-      }
-    });
-  }
-
-  wireLogout(async ()=>{ try{ await signOut(auth); }catch(e){ console.error('signOut failed', e); } });
 }
 
 function initAuth(){
