@@ -172,6 +172,15 @@ function loginHint(text){
   el.style.display = text ? '' : 'none';
 }
 
+// Set the login heading + the ID-field label per stage (device unlock vs employee).
+// data-i18n is removed so a later i18n pass won't overwrite the stage-specific text.
+function setLoginText(title, idLabel){
+  const h = document.querySelector('#loginScreen [data-i18n="login.title"]') || document.querySelector('#loginScreen h2');
+  if(h){ h.removeAttribute('data-i18n'); h.textContent = title; }
+  const lbl = document.querySelector('#loginScreen .field label');   // first field label = the ID field
+  if(lbl){ lbl.removeAttribute('data-i18n'); lbl.textContent = idLabel; }
+}
+
 // Stage 1: unlock the browser against Firebase.
 function stageDeviceUnlock(auth, signInWithEmailAndPassword){
   const form   = document.getElementById('loginForm');
@@ -182,8 +191,9 @@ function stageDeviceUnlock(auth, signInWithEmailAndPassword){
   const showErr = (msg)=>{ if(errEl){ errEl.textContent = msg; errEl.style.display = 'block'; } };
 
   showLogin();
-  loginHint('เข้าสู่ระบบด้วยบัญชี Firebase (สำหรับผู้ดูแล) เพื่อเชื่อมอุปกรณ์นี้กับฐานข้อมูล — ทำครั้งเดียวต่อเครื่อง');
-  if(userEl){ userEl.type = 'email'; userEl.placeholder = 'email'; }
+  setLoginText('รบกวนกรอกโค้ดบริษัท', 'โค้ดบริษัท');
+  loginHint('กรอกโค้ดบริษัทเพื่อเชื่อมอุปกรณ์นี้กับฐานข้อมูล — ทำครั้งเดียวต่อเครื่อง');
+  if(userEl){ userEl.type = 'text'; userEl.placeholder = 'โค้ดบริษัท'; }
   if(devBtn) devBtn.style.display = 'none';       // no local dev bypass when the DB is live
 
   if(form && !form.__fbWired){
@@ -194,7 +204,7 @@ function stageDeviceUnlock(auth, signInWithEmailAndPassword){
       if(errEl) errEl.style.display = 'none';
       const email = userEl ? userEl.value.trim() : '';
       const password = passEl ? passEl.value : '';
-      if(!email || !password){ showErr('กรุณากรอก Email และ Password ให้ครบค่ะ'); return; }
+      if(!email || !password){ showErr('กรุณากรอกโค้ดบริษัทและรหัสผ่านให้ครบค่ะ'); return; }
       const btn = form.querySelector('[type="submit"]');
       if(btn) btn.disabled = true;
       try{
@@ -215,6 +225,7 @@ function stageEmployeeGate(signOut, auth, user){
   const userEl = document.getElementById('loginUsername');
   window.__fbStage = 'employee';
   if(userEl){ userEl.type = 'text'; userEl.placeholder = 'username'; }
+  setLoginText('เข้าสู่ระบบพนักงาน', 'ID พนักงาน');
   // No Dev button on this screen anymore — a non-dev Firebase account can
   // never become Developer, so there is nothing to show here.
   const devBtn = document.getElementById('loginDevBtn');
