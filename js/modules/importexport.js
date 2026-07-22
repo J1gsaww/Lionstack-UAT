@@ -188,6 +188,20 @@
     if(!window.JSZip) throw new Error('jszip');
     return window.JSZip;
   }
+  async function needExcelJS(){
+    if(!window.ExcelJS) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js');
+    if(!window.ExcelJS) throw new Error('exceljs');
+    return window.ExcelJS;
+  }
+  // Header style applied to EVERY exported sheet: fill #95B3D7 + bold font #244062.
+  const HDR_FILL = 'FF95B3D7';
+  const HDR_FONT = 'FF244062';
+  function styleHeaderRow(ws){
+    ws.getRow(1).eachCell({ includeEmpty:true }, (cell)=>{
+      cell.font = { bold:true, color:{ argb:HDR_FONT } };
+      cell.fill = { type:'pattern', pattern:'solid', fgColor:{ argb:HDR_FILL } };
+    });
+  }
 
   /* ---------------- helpers ---------------- */
   async function readSheets(id){
@@ -245,6 +259,36 @@
     return { XLSX, wb, oversize };
   }
 
+  // Same data as workbookOf, but built with ExcelJS so the header row can carry a
+  // fill + bold font. Every cell is still forced to text. Returns an ArrayBuffer.
+  async function xlsxBufferOf(id){
+    const ExcelJS = await needExcelJS();
+    const wb = new ExcelJS.Workbook();
+    const meta = [['sheet','field','type','key','kind']];
+    const oversize = [];
+    const forceText = (ws)=> ws.eachRow({ includeEmpty:false }, (row)=> row.eachCell({ includeEmpty:true }, (cell)=>{
+      cell.numFmt = '@';
+      if(cell.value != null) cell.value = String(cell.value);
+    }));
+    for(const sh of await readSheets(id)){
+      const { fields, types, rows, oversize: big } = sheetRows(sh.value, sh.kind, true);
+      (big || []).forEach(f=> oversize.push(sh.name + '.' + f));
+      const ws = wb.addWorksheet(safeName(sh.name));
+      ws.addRow(fields.length ? fields : ['(empty)']);
+      rows.forEach(r=> ws.addRow(r.map(c=> (c == null ? '' : String(c)))));
+      forceText(ws);
+      styleHeaderRow(ws);
+      (fields.length ? fields : []).forEach(f=> meta.push([sh.name, f, types[f] || 't', sh.key, sh.kind || 'rows']));
+      if(!fields.length) meta.push([sh.name, '', '', sh.key, sh.kind || 'rows']);
+    }
+    const wsMeta = wb.addWorksheet('_meta');
+    meta.forEach(r=> wsMeta.addRow(r.map(c=> (c == null ? '' : String(c)))));
+    forceText(wsMeta);
+    styleHeaderRow(wsMeta);
+    const buffer = await wb.xlsx.writeBuffer();
+    return { buffer, oversize };
+  }
+
   /* ---------------- export ---------------- */
   async function exportJson(id){
     const sheets = await readSheets(id);
@@ -256,9 +300,8 @@
     }, null, 2)], { type:'application/json' }));
   }
   async function exportXlsx(id){
-    const { XLSX, wb, oversize } = await workbookOf(id);
-    const out = XLSX.write(wb, { bookType:'xlsx', type:'array' });
-    download(fileBase(id) + '.xlsx', new Blob([out], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    const { buffer, oversize } = await xlsxBufferOf(id);
+    download(fileBase(id) + '.xlsx', new Blob([buffer], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
     if(oversize && oversize.length) alert(T('ie.oversize').replace('{n}', oversize.length) + '\n\n' + oversize.join('\n'));
   }
   async function exportCsv(id){
@@ -279,12 +322,11 @@
   // Overall download: one zip holding every page's xlsx and csv.
   async function exportOverallZip(){
     const JSZip = await needZip();
-    const XLSX = await needXLSX();
     const zip = new JSZip();
     for(const g of dataGroups()){
-      const { wb } = await workbookOf(g.id);
+      const { buffer } = await xlsxBufferOf(g.id);
       const part = g.id.replace(/^ie/,'').toLowerCase();
-      zip.file('xlsx/' + part + '.xlsx', XLSX.write(wb, { bookType:'xlsx', type:'array' }), { binary:true });
+      zip.file('xlsx/' + part + '.xlsx', new Uint8Array(buffer));
       for(const sh of await readSheets(g.id)){
         const { fields, rows } = sheetRows(sh.value, sh.kind, false);
         zip.file('csv/' + part + '/' + safeName(sh.name) + '.csv', '\uFEFF' + csvOf(fields, rows));
