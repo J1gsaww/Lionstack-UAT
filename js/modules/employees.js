@@ -385,9 +385,13 @@
   /* ============================================================
      ROLES & ACCESS sub-page
      ============================================================ */
-  function renderRolesAccess(body){
-    const rerender = ()=> renderRolesAccess(body);
-    const cards = roles.filter(r=> !r.hidden).map(r=>{
+  function renderRolesAccess(body, selKey){
+    const rerender = (k)=> renderRolesAccess(body, k);
+    const pickable = roles.filter(r=> !r.hidden);
+    const cur = pickable.find(r=> r.key === selKey) || pickable.find(r=> r.key === 'admin') || pickable[0];
+    const curKey = cur ? cur.key : '';
+
+    const roleCardHtml = (r)=>{
       const allowed = r.system ? [...allAccessIds(), ...ACCESS_PERMISSIONS.map(pm=> pm.id)] : (access[r.key] || []);
       const boxes = ACCESS_SECTIONS.map(sec=> `
         <div class="emp-access-sec">
@@ -428,7 +432,9 @@
           <div class="emp-perm-head">${esc(T('emp.permsTitle'))}</div>
           <div class="emp-access-grid">${permBoxes}</div>
         </div>`;
-    }).join('');
+    };
+
+    const options = pickable.map(r=> `<option value="${esc(r.key)}" ${r.key===curKey?'selected':''}>${esc(r.name)}${r.system?' ('+esc(T('emp.systemRole'))+')':''}</option>`).join('');
 
     body.innerHTML = `
       <div class="panel settings-panel">
@@ -444,8 +450,14 @@
             <span class="if-note" id="empRoleNote"></span>
           </div>
         </div>
-        ${cards}
+        <div class="settings-section">
+          <label class="art-field">${esc(T('emp.selectRole'))}<select id="empRoleSelect">${options}</select></label>
+        </div>
+        ${cur ? roleCardHtml(cur) : ''}
       </div>`;
+
+    const selEl = body.querySelector('#empRoleSelect');
+    if(selEl) selEl.addEventListener('change', ()=> rerender(selEl.value));
 
     body.querySelector('#empAddRole').addEventListener('click', async ()=>{
       const note = body.querySelector('#empRoleNote');
@@ -457,12 +469,12 @@
       roles.push({ key, name, roleType });
       access[key] = access[key] || [];
       await saveRoles(); await saveAccess();
-      rerender();
+      rerender(key);
     });
 
     body.querySelectorAll('.emp-access-main input[data-kids]').forEach(master=> master.addEventListener('change', ()=>{
       const kids = (master.dataset.kids || '').split(',').filter(Boolean);
-      if(!kids.length) return;   // a page with no subpages toggles itself
+      if(!kids.length) return;
       kids.forEach(id=>{
         const box = body.querySelector(`input[data-role="${master.dataset.role}"][data-target="${id}"]`);
         if(box && box.checked !== master.checked){ box.checked = master.checked; box.dispatchEvent(new Event('change')); }
@@ -559,7 +571,7 @@
       'emp.errNoName':'กรุณากรอกชื่อ', 'emp.errNoSurname':'กรุณากรอกนามสกุล', 'emp.errNoEmployeeId':'กรุณากรอกรหัสพนักงาน', 'emp.errDupEmployeeId':'รหัสพนักงานนี้มีอยู่แล้ว', 'emp.errNoUsername':'กรุณากรอกไอดี', 'emp.errDupUsername':'ไอดีนี้มีอยู่แล้ว', 'emp.errNoPassword':'กรุณาตั้งรหัสผ่าน', 'emp.errPwMismatch':'รหัสผ่านไม่ตรงกัน',
       'emp.delConfirm':'ลบพนักงานคนนี้?',
       'emp.rolesTitle':'บทบาท & สิทธิ์การเข้าถึง', 'emp.rolesDesc':'สร้างบทบาท แล้วติ๊กว่าบทบาทนั้นเข้าเมนูไหนได้บ้าง · Developer เข้าได้ทุกอย่าง (แก้ไม่ได้)',
-      'emp.newRoleName':'ชื่อบทบาทใหม่', 'emp.roleType':'ประเภทบทบาท', 'emp.addRole':'+ เพิ่มบทบาท', 'emp.systemRole':'บทบาทระบบ', 'emp.permsTitle':'สิทธิ์การใช้งาน',
+      'emp.newRoleName':'ชื่อบทบาทใหม่', 'emp.roleType':'ประเภทบทบาท', 'emp.addRole':'+ เพิ่มบทบาท', 'emp.selectRole':'เลือกบทบาทที่จะดู', 'emp.systemRole':'บทบาทระบบ', 'emp.permsTitle':'สิทธิ์การใช้งาน',
       'emp.errNoRoleName':'กรุณากรอกชื่อบทบาท', 'emp.errDupRole':'บทบาทนี้มีอยู่แล้ว',
       'emp.delRoleConfirm':'ลบบทบาทนี้?', 'emp.roleInUse':'มีพนักงานใช้บทบาทนี้อยู่ — ลบต่อไหม?',
       'common.save':'บันทึก', 'common.cancel':'ยกเลิก', 'common.edit':'แก้ไข', 'common.delete':'ลบ'
@@ -577,7 +589,7 @@
       'emp.errNoName':'Enter a first name', 'emp.errNoSurname':'Enter a surname', 'emp.errNoEmployeeId':'Enter an employee ID', 'emp.errDupEmployeeId':'That employee ID already exists', 'emp.errNoUsername':'Enter an ID', 'emp.errDupUsername':'That ID already exists', 'emp.errNoPassword':'Set a password', 'emp.errPwMismatch':'Passwords do not match',
       'emp.delConfirm':'Delete this employee?',
       'emp.rolesTitle':'Roles & Access', 'emp.rolesDesc':'Create roles, then tick which menus each role can open · Developer has full access (not editable)',
-      'emp.newRoleName':'New role name', 'emp.roleType':'Role Type', 'emp.addRole':'+ Add role', 'emp.systemRole':'system role', 'emp.permsTitle':'Permissions',
+      'emp.newRoleName':'New role name', 'emp.roleType':'Role Type', 'emp.addRole':'+ Add role', 'emp.selectRole':'Show role', 'emp.systemRole':'system role', 'emp.permsTitle':'Permissions',
       'emp.errNoRoleName':'Enter a role name', 'emp.errDupRole':'That role already exists',
       'emp.delRoleConfirm':'Delete this role?', 'emp.roleInUse':'Employees are using this role — delete anyway?',
       'common.save':'Save', 'common.cancel':'Cancel', 'common.edit':'Edit', 'common.delete':'Delete'
