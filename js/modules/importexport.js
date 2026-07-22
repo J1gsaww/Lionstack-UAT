@@ -27,8 +27,10 @@
   // kind 'rows' (default) = an array of records · kind 'kv' = one object blob
   const GROUPS = [
     { id:'ieOverall', sheets:null },
+    { id:'ieHistory', sheets:[], view:'history' },
     { id:'ieStock', sheets:[
-      { name:'products',        key:'mod_store_products' },
+      { name:'products',        key:'mod_store_products',
+        imp:{ key:'sku', hide:['id','tag','image','images','imageNames','hasColors','colors','createdBy','createdAt'], gen:['id','createdBy','createdAt'], log:{ key:'mod_store_productlog', label:'name' } } },
       { name:'lots',            key:'mod_store_lots' },
       { name:'stockHistory',    key:'mod_store_stocklog' },
       { name:'productHistory',  key:'mod_store_productlog' },
@@ -86,6 +88,31 @@
   }
 
   let subPage = SUBPAGES[0];
+
+  /* ---------------- import config helpers ---------------- */
+  // Mirrors store-core's id scheme so imported records look native.
+  const rid = ()=> 'a' + Math.random().toString(36).slice(2, 10);
+  // Who is uploading: Developer / Admin shown as such, otherwise the employee name.
+  function actorName(){
+    const e = window.currentEmployee;
+    const rk = (e && e.roleKey) || window.currentRole;
+    if(rk === 'developer') return 'Developer';
+    if(rk === 'admin') return 'Admin';
+    if(!e) return '\u2014';
+    const full = ((e.name || '') + ' ' + (e.surname || '')).trim();
+    return full || e.username || '\u2014';
+  }
+  const impOf = (sh)=> (sh && sh.imp) ? sh.imp : null;
+  const importablesOf = (pageId)=> sheetsOf(pageId).filter(sh=> sh.imp);
+  // On a configured page (any sheet importable) the xlsx carries only the
+  // importable sheets; unconfigured pages still export everything (legacy).
+  const sheetsForXlsx = (all)=> all.some(sh=> sh.imp) ? all.filter(sh=> sh.imp) : all;
+  // Columns hidden from the xlsx FILE for a sheet (the business key is never hidden).
+  function hiddenCols(sh){
+    const imp = impOf(sh);
+    if(!imp || !imp.hide) return [];
+    return imp.hide.filter(f=> f !== imp.key);
+  }
 
   /* ---------------- value <-> text ---------------- */
   const MAX_CELL = 32000;                 // Excel's own limit is 32767
@@ -270,16 +297,21 @@
       cell.numFmt = '@';
       if(cell.value != null) cell.value = String(cell.value);
     }));
-    for(const sh of await readSheets(id)){
+    const all = await readSheets(id);
+    const full = (id === 'ieOverall');                 // the aggregate backup stays complete
+    for(const sh of (full ? all : sheetsForXlsx(all))){
       const { fields, types, rows, oversize: big } = sheetRows(sh.value, sh.kind, true);
       (big || []).forEach(f=> oversize.push(sh.name + '.' + f));
+      const hide = full ? [] : hiddenCols(sh);
+      const keep = fields.map((f, i)=> ({ f, i })).filter(x=> hide.indexOf(x.f) < 0);
+      const vfields = keep.map(x=> x.f);
       const ws = wb.addWorksheet(safeName(sh.name));
-      ws.addRow(fields.length ? fields : ['(empty)']);
-      rows.forEach(r=> ws.addRow(r.map(c=> (c == null ? '' : String(c)))));
+      ws.addRow(vfields.length ? vfields : ['(empty)']);
+      rows.forEach(r=> ws.addRow(keep.map(x=> (r[x.i] == null ? '' : String(r[x.i])))));
       forceText(ws);
       styleHeaderRow(ws);
-      (fields.length ? fields : []).forEach(f=> meta.push([sh.name, f, types[f] || 't', sh.key, sh.kind || 'rows']));
-      if(!fields.length) meta.push([sh.name, '', '', sh.key, sh.kind || 'rows']);
+      vfields.forEach(f=> meta.push([sh.name, f, types[f] || 't', sh.key, sh.kind || 'rows']));
+      if(!vfields.length) meta.push([sh.name, '', '', sh.key, sh.kind || 'rows']);
     }
     const wsMeta = wb.addWorksheet('_meta');
     meta.forEach(r=> wsMeta.addRow(r.map(c=> (c == null ? '' : String(c)))));
@@ -352,6 +384,7 @@
     const lines = incoming.map(k=> '\u2022 ' + k + ' (' + countOf(data[k]) + ')').join('\n');
     if(!window.confirm(T('ie.confirm').replace('{n}', incoming.length) + '\n\n' + lines + (skipped ? '\n\n' + T('ie.skipped').replace('{n}', skipped) : ''))) return;
     for(const k of incoming) await window.Store.set(k, data[k]);
+    await logImport(id, file.name, 'json', incoming.map(k=> ({ name:k, rows: countOf(data[k]) })));
     alert(T('ie.done').replace('{n}', incoming.length));
     if(typeof onDone === 'function') onDone();
   }
@@ -428,8 +461,279 @@
       catch(e){ alert(T('ie.errCell').replace('{s}', p.sh.name) + '\n' + e.message); return; }
       await window.Store.set(p.sh.key, value);
     }
+    await logImport(id, file.name, 'xlsx', plan.map(p=> ({ name:p.sh.name, rows:p.rows.length })));
     alert(T('ie.done').replace('{n}', plan.length));
     if(typeof onDone === 'function') onDone();
+  }
+
+  /* ============================================================
+     import wizard (configured pages) — stepped, upsert by business key
+     ============================================================ */
+  let wiz = null;
+
+  function recsFromRows(header, types, rows){
+    return rows.map(r=>{
+      const rec = {};
+      header.forEach((f, i)=>{ rec[f] = fromText(r[i], (types && types[f]) || 't'); });
+      return rec;
+    });
+  }
+
+  function validateIncoming(header, records, imp){
+    const bk = imp.key;
+    const errors = [];
+    if(header && header.indexOf(bk) < 0){ errors.push(T('ie.errNoKey').replace('{k}', bk)); return errors; }
+    const seen = {}; const dups = []; let emptyKey = false;
+    records.forEach(rec=>{
+      const k = String(rec[bk] == null ? '' : rec[bk]).trim();
+      if(k === ''){ emptyKey = true; return; }
+      seen[k] = (seen[k] || 0) + 1;
+      if(seen[k] === 2) dups.push(k);
+    });
+    if(emptyKey) errors.push(T('ie.errEmptyKey').replace('{k}', bk));
+    if(dups.length) errors.push(T('ie.errDupKey').replace('{k}', bk).replace('{v}', dups.slice(0, 10).join(', ') + (dups.length > 10 ? ' \u2026' : '')));
+    return errors;
+  }
+
+  // Upsert `incoming` into `current` by business key.
+  //   'xlsx' : file has visible columns only -> overwrite those, preserve hidden
+  //            columns on update, generate id/createdBy/createdAt on create.
+  //   'json' : file has the whole record -> replace on match, add on new.
+  function upsertInto(current, incoming, imp, mode){
+    const bk = imp.key;
+    const gen = imp.gen || [];
+    const arr = Array.isArray(current) ? current.map(x=> (x && typeof x === 'object') ? { ...x } : x) : [];
+    const idx = {};
+    arr.forEach((rec, i)=>{ if(rec && rec[bk] != null) idx[String(rec[bk])] = i; });
+    const created = []; const edited = [];
+    incoming.forEach(inc=>{
+      const k = String(inc[bk] == null ? '' : inc[bk]);
+      const at = idx[k];
+      if(at != null){
+        const before = { ...arr[at] };
+        if(mode === 'json'){
+          arr[at] = { ...inc };
+        }else{
+          const merged = { ...arr[at] };
+          Object.keys(inc).forEach(f=>{ merged[f] = inc[f]; });   // visible fields; hidden ones stay
+          arr[at] = merged;
+        }
+        edited.push({ key:k, before, after:{ ...arr[at] } });
+      }else{
+        const nrec = { ...inc };
+        if(mode === 'json'){
+          if(nrec.id == null) nrec.id = rid();
+        }else{
+          gen.forEach(f=>{
+            if(f === 'id') nrec.id = rid();
+            else if(f === 'createdBy') nrec.createdBy = actorName();
+            else if(f === 'createdAt') nrec.createdAt = new Date().toISOString();
+            else if(nrec[f] === undefined) nrec[f] = null;
+          });
+        }
+        arr.push(nrec);
+        idx[k] = arr.length - 1;
+        created.push(nrec);
+      }
+    });
+    return { value: arr, created, edited };
+  }
+
+  // Read a chosen file into wiz.sheets (only the importable sheets found in it).
+  async function parseImportFile(file, pageId){
+    const nm = (file.name || '').toLowerCase();
+    const targets = importablesOf(pageId);
+    if(nm.endsWith('.json')){
+      let parsed;
+      try{ parsed = JSON.parse(await file.text()); }
+      catch(e){ return { error: T('ie.errParse') }; }
+      const data = (parsed && parsed.data) ? parsed.data : parsed;
+      if(!data || typeof data !== 'object') return { error: T('ie.errShape') };
+      const sheets = [];
+      targets.forEach(sh=>{ if(Array.isArray(data[sh.key])) sheets.push({ name:sh.name, key:sh.key, imp:sh.imp, mode:'json', records:data[sh.key] }); });
+      if(!sheets.length) return { error: T('ie.errNoImp') };
+      return { kind:'json', sheets };
+    }
+    if(nm.endsWith('.xlsx')){
+      const XLSX = await needXLSX();
+      let wb;
+      try{ wb = XLSX.read(await file.arrayBuffer(), { type:'array' }); }
+      catch(e){ return { error: T('ie.errParse') }; }
+      const bad = [];
+      wb.SheetNames.forEach(n=>{
+        const ws = wb.Sheets[n];
+        Object.keys(ws).forEach(addr=>{ if(addr[0] !== '!' && ws[addr].t !== 's') bad.push(n + '!' + addr); });
+      });
+      if(bad.length) return { error: T('ie.errNotText').replace('{n}', bad.length) };
+      const metaTypes = {};
+      if(wb.Sheets['_meta']){
+        XLSX.utils.sheet_to_json(wb.Sheets['_meta'], { header:1, defval:'' }).slice(1).forEach(r=>{
+          const [shName, field, type] = r;
+          if(!shName || !field) return;
+          (metaTypes[shName] = metaTypes[shName] || {})[field] = type || 't';
+        });
+      }
+      const sheets = [];
+      targets.forEach(sh=>{
+        const ws = wb.Sheets[safeName(sh.name)] || wb.Sheets[sh.name];
+        if(!ws) return;
+        const aoa = XLSX.utils.sheet_to_json(ws, { header:1, defval:'' });
+        const header = (aoa[0] || []).map(h=> String(h).trim()).filter(h=> h !== '');
+        const types = metaTypes[sh.name] || {};
+        if(!Object.keys(types).length) header.forEach(f=>{ types[f] = 't'; });
+        const rows = aoa.slice(1).filter(r=> r.some(c=> String(c).trim() !== ''));
+        sheets.push({ name:sh.name, key:sh.key, imp:sh.imp, mode:'xlsx', header, types, rows });
+      });
+      if(!sheets.length) return { error: T('ie.errNoImp') };
+      return { kind:'xlsx', sheets };
+    }
+    return { error: T('ie.errFormat') };
+  }
+
+  const wizRows = (sh)=> sh.mode === 'json' ? (sh.records || []).length : (sh.rows || []).length;
+  const wizPicked = ()=>{
+    if(!wiz || !wiz.sheets) return null;
+    if(wiz.kind === 'json') return wiz.sheets;               // json: every importable sheet found
+    return wiz.sheets.filter(s=> s.name === wiz.pick);       // xlsx: only the chosen sheet
+  };
+
+  // (1) Import History — one row per upload, EVERY upload, in mod_ie_history.
+  async function logImport(page, file, mode, detail){
+    const K = 'mod_ie_history';
+    let arr = [];
+    try{ const cur = await window.Store.get(K); if(Array.isArray(cur)) arr = cur; }catch(e){}
+    arr.unshift({ id: rid(), at: new Date().toISOString(), by: actorName(), page, file: file || '', mode: mode || '', detail: detail || [] });
+    if(arr.length > 500) arr = arr.slice(0, 500);
+    try{ await window.Store.set(K, arr); }catch(e){ console.error('logImport failed', e); }
+  }
+  // (2) Per-record edit history — for pages that keep their own log (imp.log). Written
+  //     in store-core's logRec shape so entries show in that page's Edit History.
+  async function appendEditLog(logCfg, bk, created, edited){
+    if(!logCfg || !logCfg.key) return;
+    let log = [];
+    try{ const cur = await window.Store.get(logCfg.key); if(Array.isArray(cur)) log = cur; }catch(e){}
+    const by = actorName();
+    const lf = logCfg.label || 'name';
+    const mk = (rec, action)=> ({ id: rid(), entityId: rec.id, label: rec[lf] || rec[bk] || rec.id, action, at: new Date().toISOString(), by, snapshot: JSON.parse(JSON.stringify(rec)), via:'import' });
+    created.forEach(r=> log.push(mk(r, 'create')));
+    edited.forEach(e=> log.push(mk(e.after, 'edit')));
+    try{ await window.Store.set(logCfg.key, log); }catch(e){ console.error('appendEditLog failed', e); }
+  }
+
+  function renderImportWizard(body, pageId){
+    const host = body.querySelector('#ieImportArea');
+    if(!host) return;
+    const multiSheet = wiz && wiz.kind === 'xlsx' && wiz.sheets.length > 1;
+    const picked = wizPicked();
+    const totalRows = picked ? picked.reduce((s, sh)=> s + wizRows(sh), 0) : 0;
+
+    host.innerHTML = `
+      <div class="ie-actions">
+        <span class="ie-label">${esc(T('ie.importAs'))}</span>
+        <label class="file-picker">
+          <input type="file" id="ieFile" accept=".xlsx,.json,application/json">
+          <span class="file-picker-btn">${esc(T('ie.pickFile'))}</span>
+        </label>
+        ${wiz && wiz.file ? `<span style="opacity:.8; font-size:13px;">${esc(wiz.file.name)}</span>` : ''}
+      </div>
+      ${wiz && wiz.error ? `<p class="setting-desc art-pending-due">\u26A0 ${esc(wiz.error)}</p>` : ''}
+      ${wiz && wiz.sheets ? `
+        <div style="margin-top:8px;">
+          ${multiSheet ? `<label class="art-field">${esc(T('ie.pickSheet'))}
+            <select id="ieSheetSel">${wiz.sheets.map(s=> `<option value="${esc(s.name)}" ${s.name===wiz.pick?'selected':''}>${esc(s.name)}</option>`).join('')}</select>
+          </label>` : ''}
+          <p class="setting-desc">${esc(T('ie.willImport'))}: ${picked.map(s=> esc(s.name) + ' (' + wizRows(s) + ')').join(' \u00B7 ')} \u2014 ${esc(T('ie.rowCount').replace('{n}', totalRows))}</p>
+          <div class="ie-actions">
+            <button class="btn btn-ghost" id="ieSubmit">${esc(T('ie.submit'))}</button>
+            ${wiz.submitted && wiz.ok ? `<button class="btn btn-primary" id="ieUpload">${esc(T('ie.upload'))}</button>` : ''}
+          </div>
+          ${wiz.submitted ? (wiz.ok
+            ? `<p class="setting-desc" style="color:#2e7d32; font-weight:600;">\u2714 ${esc(T('ie.checkOk'))}</p>`
+            : `<div style="border:1px solid #C6432E; border-radius:8px; padding:8px 12px; margin:6px 0; color:#C6432E;"><b>${esc(T('ie.checkFail'))}</b><ul style="margin:6px 0 0; padding-left:18px;">${wiz.errors.map(e=> `<li>${esc(e)}</li>`).join('')}</ul></div>`) : ''}
+        </div>` : ''}
+      ${wiz && wiz.summary ? `<p class="setting-desc" style="color:#2e7d32; font-weight:600;">\u2714 ${esc(T('ie.upResult').replace('{c}', wiz.summary.created).replace('{u}', wiz.summary.edited))} \u2014 ${esc(T('ie.refreshing'))}</p>` : ''}
+      <p class="setting-desc">${esc(T('ie.importHint'))}</p>`;
+
+    const fileEl = host.querySelector('#ieFile');
+    if(fileEl) fileEl.addEventListener('change', async (e)=>{
+      const f = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if(!f) return;
+      wiz = { file:f };
+      renderImportWizard(body, pageId);
+      const res = await parseImportFile(f, pageId);
+      wiz = res.error ? { file:f, error:res.error }
+                      : { file:f, kind:res.kind, sheets:res.sheets, pick:res.sheets[0].name, submitted:false, ok:false, errors:[] };
+      renderImportWizard(body, pageId);
+    });
+
+    const sel = host.querySelector('#ieSheetSel');
+    if(sel) sel.addEventListener('change', ()=>{
+      wiz.pick = sel.value; wiz.submitted = false; wiz.ok = false; wiz.errors = [];
+      renderImportWizard(body, pageId);
+    });
+
+    const submit = host.querySelector('#ieSubmit');
+    if(submit) submit.addEventListener('click', ()=>{
+      let errs = [];
+      const picks = wizPicked();
+      picks.forEach(sh=>{
+        const records = sh.mode === 'json' ? (sh.records || []) : recsFromRows(sh.header, sh.types, sh.rows);
+        const e = validateIncoming(sh.mode === 'json' ? null : sh.header, records, sh.imp);
+        errs = errs.concat(e.map(m=> (picks.length > 1 ? sh.name + ': ' : '') + m));
+      });
+      wiz.submitted = true; wiz.errors = errs; wiz.ok = errs.length === 0;
+      renderImportWizard(body, pageId);
+    });
+
+    const upload = host.querySelector('#ieUpload');
+    if(upload) upload.addEventListener('click', async ()=>{
+      upload.disabled = true;
+      let created = 0, edited = 0;
+      const detail = [];
+      try{
+        for(const sh of wizPicked()){
+          const records = sh.mode === 'json' ? (sh.records || []) : recsFromRows(sh.header, sh.types, sh.rows);
+          const current = await window.Store.get(sh.key);
+          const out = upsertInto(current, records, sh.imp, sh.mode);
+          await window.Store.set(sh.key, out.value);
+          await appendEditLog(sh.imp.log, sh.imp.key, out.created, out.edited);   // per-record edit history
+          created += out.created.length; edited += out.edited.length;
+          detail.push({ name: sh.name, rows: records.length, created: out.created.length, edited: out.edited.length });
+        }
+        await logImport(pageId, wiz.file.name, wiz.kind, detail);                 // Import History (every upload)
+      }catch(err){ alert(T('ie.errLib') + '\n' + (err && err.message ? err.message : err)); upload.disabled = false; return; }
+      wiz.summary = { created, edited };
+      renderImportWizard(body, pageId);
+      setTimeout(()=> location.reload(), 1600);
+    });
+  }
+
+  // Unconfigured pages keep the old whole-sheet import until their category is set up.
+  function renderLegacyImport(body, pageId){
+    const host = body.querySelector('#ieImportArea');
+    if(!host) return;
+    host.innerHTML = `
+      <div class="ie-actions">
+        <span class="ie-label">${esc(T('ie.importAs'))}</span>
+        <label class="file-picker">
+          <input type="file" id="ieImport" accept=".xlsx,.json,application/json">
+          <span class="file-picker-btn">${esc(T('ie.import'))}</span>
+        </label>
+      </div>
+      <p class="setting-desc">${esc(T('ie.importHint'))}</p>
+      ${pageId === 'ieOverall' ? `<p class="setting-desc art-pending-due">\u26A0 ${esc(T('ie.overallWarn'))}</p>` : ''}`;
+    const run = async (fn)=>{ try{ await fn(); } catch(e){ alert(T('ie.errLib') + '\n' + (e && e.message ? e.message : e)); } };
+    host.querySelector('#ieImport').addEventListener('change', async (e)=>{
+      const file = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if(!file) return;
+      const done = ()=> location.reload();
+      const nm = (file.name || '').toLowerCase();
+      if(nm.endsWith('.json')) await run(()=> importJson(pageId, file, done));
+      else if(nm.endsWith('.xlsx')) await run(()=> importXlsx(pageId, file, done));
+      else alert(T('ie.errFormat'));
+    });
   }
 
   /* ---------------- ui ---------------- */
@@ -441,10 +745,42 @@
     ).join('');
   }
 
+  async function renderHistoryView(body){
+    let log = [];
+    try{ const cur = await window.Store.get('mod_ie_history'); if(Array.isArray(cur)) log = cur; }catch(e){}
+    const fmt = (iso)=>{ try{ return new Date(iso).toLocaleString(); }catch(e){ return iso || ''; } };
+    const detailText = (d)=> (d || []).map(x=>{
+      const cu = (x.created != null || x.edited != null) ? ` (+${x.created||0}/~${x.edited||0})` : '';
+      return esc(x.name) + ' \u00D7' + (x.rows != null ? x.rows : '?') + cu;
+    }).join(' \u00B7 ');
+    body.innerHTML = `
+      <div class="panel">
+        <h4 class="art-form-section" style="margin-top:0;">${esc(T('sub.ieHistory'))}</h4>
+        <p class="setting-desc" style="margin-top:-6px;">${esc(T('desc.ieHistory'))}</p>
+        <div class="art-table-wrap">
+          <table class="art-table">
+            <thead><tr>
+              <th>${esc(T('ie.histWhen'))}</th><th>${esc(T('ie.histBy'))}</th>
+              <th>${esc(T('ie.histPage'))}</th><th>${esc(T('ie.histFile'))}</th>
+              <th>${esc(T('ie.histDetail'))}</th>
+            </tr></thead>
+            <tbody>${log.length ? log.map(e=> `<tr>
+              <td>${esc(fmt(e.at))}</td>
+              <td>${esc(e.by || '-')}</td>
+              <td>${esc(T('sub.' + e.page) || e.page)}</td>
+              <td class="art-id">${esc(e.file || '-')}<span class="setting-desc"> ${esc((e.mode || '').toUpperCase())}</span></td>
+              <td>${detailText(e.detail)}</td>
+            </tr>`).join('') : `<tr><td colspan="5" class="art-empty">${esc(T('ie.histEmpty'))}</td></tr>`}</tbody>
+          </table>
+        </div>
+      </div>`;
+  }
+
   async function drawBody(container){
     const body = container.querySelector('#ieBody');
     if(!body) return;
     const g = groupOf(subPage);
+    if(g.view === 'history'){ await renderHistoryView(body); return; }
     const derived = !!(g.sheets && g.sheets.length === 0);
     const sheets = derived ? [] : await readSheets(subPage);
     const total = sheets.reduce((s,sh)=> s + countOf(sh.value), 0);
@@ -477,15 +813,7 @@
         </div>
         <p class="setting-desc">${esc(T('ie.exportHint'))}</p>
 
-        <div class="ie-actions">
-          <span class="ie-label">${esc(T('ie.importAs'))}</span>
-          <label class="file-picker">
-            <input type="file" id="ieImport" accept=".xlsx,.json,application/json">
-            <span class="file-picker-btn">${esc(T('ie.import'))}</span>
-          </label>
-        </div>
-        <p class="setting-desc">${esc(T('ie.importHint'))}</p>
-        ${isOverall ? `<p class="setting-desc art-pending-due">\u26A0 ${esc(T('ie.overallWarn'))}</p>` : ''}
+        <div id="ieImportArea"></div>
         `}
       </div>`;
 
@@ -500,25 +828,20 @@
     const zipBtn = body.querySelector('#ieZip');
     if(zipBtn) zipBtn.addEventListener('click', ()=> run(exportOverallZip));
 
-    body.querySelector('#ieImport').addEventListener('change', async (e)=>{
-      const file = e.target.files && e.target.files[0];
-      e.target.value = '';
-      if(!file) return;
-      const done = ()=> location.reload();     // let every module re-read its data
-      const name = (file.name || '').toLowerCase();
-      if(name.endsWith('.json')) await run(()=> importJson(subPage, file, done));
-      else if(name.endsWith('.xlsx')) await run(()=> importXlsx(subPage, file, done));
-      else alert(T('ie.errFormat'));
-    });
+    wiz = null;
+    if(subPage !== 'ieOverall' && importablesOf(subPage).length) renderImportWizard(body, subPage);
+    else renderLegacyImport(body, subPage);
   }
 
   window.registerModuleI18n(ID, {
     th: {
       'title':'นำเข้า / ส่งออก', 'crumb':'สำรองและกู้คืนข้อมูลแยกตามหน้า',
-      'sub.ieOverall':'ทั้งหมด', 'sub.ieStock':'จัดการสต๊อก', 'sub.ieSell':'การขาย', 'sub.ieDelivery':'การจัดส่ง',
+      'sub.ieOverall':'ทั้งหมด', 'sub.ieHistory':'ประวัติการนำเข้า', 'sub.ieStock':'จัดการสต๊อก', 'sub.ieSell':'การขาย', 'sub.ieDelivery':'การจัดส่ง',
       'sub.ieStorefront':'หน้าร้าน', 'sub.ieRevenue':'รายได้ & บัญชี', 'sub.ieCogs':'ต้นทุนขาย & มูลค่าสต๊อก',
       'sub.ieExpense':'รายจ่าย & เจ้าหนี้', 'sub.ieFinancial':'รายงานการเงิน', 'sub.iePayroll':'เงินเดือน',
       'sub.ieCalendar':'ปฏิทินพนักงาน', 'sub.ieEmployees':'พนักงาน & สิทธิ์', 'sub.ieSetting':'ตั้งค่าทั้งหมด',
+      'desc.ieHistory':'ทุกครั้งที่มีการนำเข้าไฟล์ จะถูกบันทึกไว้ที่นี่ — ใครนำเข้าไฟล์อะไร เข้าหน้าไหน กี่แถว เมื่อไหร่',
+      'ie.histWhen':'เมื่อไหร่', 'ie.histBy':'โดย', 'ie.histPage':'หน้า', 'ie.histFile':'ไฟล์', 'ie.histDetail':'รายละเอียด (ชีต ×แถว +เพิ่ม/~อัปเดต)', 'ie.histEmpty':'ยังไม่มีการนำเข้า',
       'desc.ieOverall':'สำรองทั้งระบบ — ปุ่ม ZIP จะได้ไฟล์ xlsx + csv ของทุกหน้า พร้อมไฟล์ JSON สำรองในไฟล์เดียว',
       'desc.ieStock':'สินค้า · ต้นทุน (lot) · ประวัติสต๊อก · ประวัติแก้ไขสินค้า · สินค้าที่ถูกลบ',
       'desc.ieSell':'บิลขาย · ประวัติแก้ไขบิล · บิลที่ถูกลบ',
@@ -535,7 +858,11 @@
       'ie.sheets':'จำนวนชีต', 'ie.records':'จำนวนรายการ', 'ie.sheet':'ชีต', 'ie.key':'ชุดข้อมูล',
       'ie.exportAs':'ส่งออกเป็น', 'ie.importAs':'นำเข้า', 'ie.import':'เลือกไฟล์ (.xlsx / .json)', 'ie.zip':'ZIP ทั้งหมด',
       'ie.exportHint':'xlsx = 1 ชีตต่อ 1 หน้าย่อย ทุกช่องเป็นข้อความ · csv หลายชีตจะรวมเป็นไฟล์ zip · json ใช้กู้คืนได้ครบที่สุด',
-      'ie.importHint':'นำเข้าได้เฉพาะ .xlsx และ .json · ระบบจะเช็คหัวตารางให้ตรงกับหน้านี้ก่อน แล้วถามยืนยันก่อนเขียนทับ',
+      'ie.importHint':'นำเข้าได้เฉพาะ .xlsx และ .json · ระบบจะเทียบด้วย business key แล้วอัปเดตของเดิม/เพิ่มของใหม่ (ไม่เขียนทับทั้งหมด)',
+      'ie.pickFile':'เลือกไฟล์', 'ie.pickSheet':'เลือกชีต', 'ie.willImport':'จะนำเข้า', 'ie.rowCount':'รวม {n} แถว',
+      'ie.submit':'ตรวจสอบ', 'ie.upload':'อัปโหลดเข้าระบบ', 'ie.checkOk':'ไฟล์พร้อมอัปโหลด', 'ie.checkFail':'พบปัญหา แก้ไฟล์แล้วลองใหม่',
+      'ie.errNoKey':'ไม่พบคอลัมน์ที่ใช้เทียบ ({k}) ในไฟล์', 'ie.errEmptyKey':'มีบางแถวไม่มีค่า {k}', 'ie.errDupKey':'{k} ซ้ำกันในไฟล์: {v}',
+      'ie.errNoImp':'ไม่พบชีตที่นำเข้าได้ในไฟล์นี้', 'ie.upResult':'เพิ่ม {c} · อัปเดต {u} รายการ', 'ie.refreshing':'กำลังรีเฟรช…',
       'ie.overallWarn':'การนำเข้าที่หน้านี้เขียนทับข้อมูลทั้งระบบ — ส่งออกไฟล์สำรองไว้ก่อนเสมอ',
       'ie.derived':'หน้านี้ไม่มีข้อมูลของตัวเอง — สำรอง/กู้คืนได้ที่ {p}',
       'ie.confirm':'ยืนยันนำเข้า {n} ชุดข้อมูล และเขียนทับของเดิม?',
@@ -557,7 +884,9 @@
       'sub.ieOverall':'Overall', 'sub.ieStock':'Stock Management', 'sub.ieSell':'Sell Management', 'sub.ieDelivery':'Delivery',
       'sub.ieStorefront':'Storefront', 'sub.ieRevenue':'Revenue & Accounting', 'sub.ieCogs':'COGS & Inventory',
       'sub.ieExpense':'Expense & Payable', 'sub.ieFinancial':'Financial Report', 'sub.iePayroll':'Payroll',
-      'sub.ieCalendar':'Employee Calendar', 'sub.ieEmployees':'Employees & Access', 'sub.ieSetting':'All Settings',
+      'sub.ieCalendar':'Employee Calendar', 'sub.ieEmployees':'Employees & Access', 'sub.ieSetting':'All Settings', 'sub.ieHistory':'Import History',
+      'desc.ieHistory':'Every import is logged here — who imported what file, into which page, how many rows, and when',
+      'ie.histWhen':'When', 'ie.histBy':'By', 'ie.histPage':'Page', 'ie.histFile':'File', 'ie.histDetail':'Detail (sheet ×rows +added/~updated)', 'ie.histEmpty':'No imports yet',
       'desc.ieOverall':'Whole-system backup — the ZIP button gives you every page as xlsx + csv plus a JSON backup in one file',
       'desc.ieStock':'Products · cost lots · stock history · product edit history · deleted products',
       'desc.ieSell':'Bills · bill edit history · deleted bills',
@@ -574,7 +903,11 @@
       'ie.sheets':'Sheets', 'ie.records':'Records', 'ie.sheet':'Sheet', 'ie.key':'Data set',
       'ie.exportAs':'Export as', 'ie.importAs':'Import', 'ie.import':'Choose a file (.xlsx / .json)', 'ie.zip':'ZIP everything',
       'ie.exportHint':'xlsx = one sheet per subpage, every cell text · multi-sheet csv comes as a zip · json restores most faithfully',
-      'ie.importHint':'Only .xlsx and .json can be imported · headers are checked against this page first, then you confirm before anything is written',
+      'ie.importHint':'Only .xlsx and .json can be imported · matched by business key, then existing rows are updated and new ones added (not a full overwrite)',
+      'ie.pickFile':'Choose file', 'ie.pickSheet':'Sheet', 'ie.willImport':'Will import', 'ie.rowCount':'{n} rows',
+      'ie.submit':'Check', 'ie.upload':'Upload', 'ie.checkOk':'File is ready to upload', 'ie.checkFail':'Problems found — fix the file and retry',
+      'ie.errNoKey':'Key column ({k}) not found in file', 'ie.errEmptyKey':'Some rows have an empty {k}', 'ie.errDupKey':'Duplicate {k} in file: {v}',
+      'ie.errNoImp':'No importable sheet found in this file', 'ie.upResult':'Added {c} · updated {u}', 'ie.refreshing':'refreshing…',
       'ie.overallWarn':'Importing here overwrites the whole system — always export a backup first',
       'ie.derived':'No data of its own — back it up under {p}',
       'ie.confirm':'Import {n} data set(s) and overwrite the current ones?',
