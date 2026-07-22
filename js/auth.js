@@ -10,12 +10,35 @@
 //     employees). Wired to REAL Firebase Auth when APP_MODE='firebase'.
 //
 // FIREBASE mode: real Email/Password auth (dynamic-imported so local
-//   mode never depends on the gstatic SDK). A Firebase sign-in maps to
-//   the Developer role.
+//   mode never depends on the gstatic SDK). There is NO "Dev Login"
+//   button in Firebase mode. The Developer role is granted ONLY when the
+//   email that unlocks the device matches the developer's (see below);
+//   every other Firebase account goes to the ordinary employee gate.
 //
 // The app only renders after enterApp() fires `app-authenticated`
 // (app.js awaits authReadyPromise). Until then the login screen shows.
 // ============================================================
+
+// ------------------------------------------------------------
+// DEV IDENTITY. The Developer role in Firebase mode is unlocked only when
+// the unlocking email matches the one below. The raw email is NEVER stored
+// — only a salted SHA-256 of it lives here, so viewing the page source (F12)
+// shows a hash, not the address. This removes the open "Dev Login" button.
+// (Honest limit: a determined user in DevTools can still bypass any
+// client-side check; this raises the bar, it is not a hard wall.)
+// ------------------------------------------------------------
+const DEV_SALT = '760d06de570f310fc216adc1c54a3285';
+const DEV_EMAIL_HASH = '403529bb6b60917507446d45f37e534b485f66173ed12d09ae18d6c98e3fcdce';
+
+async function sha256Hex(str){
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b=> b.toString(16).padStart(2, '0')).join('');
+}
+async function isDevEmail(email){
+  if(!email) return false;
+  const h = await sha256Hex(DEV_SALT + ':' + String(email).trim().toLowerCase());
+  return h === DEV_EMAIL_HASH;
+}
 
 function enterApp(label){
   const loginScreen = document.getElementById('loginScreen');
@@ -83,13 +106,22 @@ function initLocalLogin(){
     });
   }
 
+  // The Dev bootstrap button exists ONLY in local mode (localhost first-run
+  // bootstrap). In Firebase (production) it is removed from the DOM entirely:
+  // the Developer role comes from the dev-email match at device unlock, never
+  // from a button anyone can press.
   if(devBtn){
-    devBtn.addEventListener('click', ()=>{
-      window.currentRole = 'developer';
-      window.currentEmployee = { username:'dev', name:'Developer', roleKey:'developer' };
-      if(passEl) passEl.value = '';
-      enterApp('Developer (dev)');
-    });
+    if(window.APP_MODE === 'firebase'){
+      devBtn.remove();
+    }else{
+      devBtn.style.display = '';
+      devBtn.addEventListener('click', ()=>{
+        window.currentRole = 'developer';
+        window.currentEmployee = { username:'dev', name:'Developer', roleKey:'developer' };
+        if(passEl) passEl.value = '';
+        enterApp('Developer (dev)');
+      });
+    }
   }
 
   wireLogout(()=>{
@@ -181,14 +213,12 @@ function stageDeviceUnlock(auth, signInWithEmailAndPassword){
 // Stage 2: the ordinary employee login, with a way back out of the device session.
 function stageEmployeeGate(signOut, auth, user){
   const userEl = document.getElementById('loginUsername');
-  const devBtn = document.getElementById('loginDevBtn');
   window.__fbStage = 'employee';
   if(userEl){ userEl.type = 'text'; userEl.placeholder = 'username'; }
-  if(devBtn){
-    devBtn.style.display = '';
-    // In firebase mode the Dev role belongs to whoever unlocked the device.
-    devBtn.textContent = user && user.email ? ('Developer \u00B7 ' + user.email) : 'Dev Login';
-  }
+  // No Dev button on this screen anymore — a non-dev Firebase account can
+  // never become Developer, so there is nothing to show here.
+  const devBtn = document.getElementById('loginDevBtn');
+  if(devBtn) devBtn.remove();
   loginHint('อุปกรณ์นี้เชื่อมกับฐานข้อมูลแล้ว — เข้าสู่ระบบด้วย ID พนักงานของคุณ');
 
   if(!employeeGateWired){
@@ -243,7 +273,24 @@ async function initFirebaseAuth(){
   onAuthStateChanged(auth, async (user)=>{
     if(user){
       if(window.__hydrateStore) await window.__hydrateStore();   // rules need the session
-      stageEmployeeGate(signOut, auth, user);
+      // Developer is unlocked ONLY when the unlocking email is the dev's.
+      // The shared/central account (and any other) falls through to the
+      // ordinary employee gate — no Dev button, no Dev role.
+      if(await isDevEmail(user.email)){
+        const db = document.getElementById('loginDevBtn'); if(db) db.remove();
+        window.currentRole = 'developer';
+        window.currentEmployee = { username:'dev', name:'Developer', roleKey:'developer' };
+        if(!window.__devLogoutWired){
+          window.__devLogoutWired = true;
+          wireLogout(async ()=>{
+            try{ await signOut(auth); }catch(e){ console.error('signOut failed', e); }
+            location.reload();
+          });
+        }
+        enterApp('Developer \u00B7 ' + user.email);
+      }else{
+        stageEmployeeGate(signOut, auth, user);
+      }
     }else{
       stageDeviceUnlock(auth, signInWithEmailAndPassword);
     }
