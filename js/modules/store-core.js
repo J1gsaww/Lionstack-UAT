@@ -845,6 +845,8 @@
     const all = deliveries.map(d=> ({ d, o: orders.find(x=> x.id === d.orderId) })).filter(r=> r.o);
     const drivers = [...new Set(all.map(r=> r.o.deliveryResponsible).filter(Boolean))].sort();
     const types = config.shippingTypes || [];
+    const _WEEKDAYS_TH = ['จ.','อ.','พ.','พฤ.','ศ.','ส.','อา.'];
+    const _WEEKDAYS_EN = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
     const wk = (en?_WEEKDAYS_EN:_WEEKDAYS_TH).map(w=> `<span>${esc(w)}</span>`).join('');
     body.innerHTML = `<div class="panel">
       <div class="art-toolbar">
