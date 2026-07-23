@@ -127,6 +127,7 @@
     { id:'verifyStock',         label:{ th:'ยืนยันประวัติสต๊อก', en:'Verify Stock History' } },
     { id:'verifyDelivery',      label:{ th:'ยืนยันการจัดส่ง', en:'Verify Delivery' } },
     { id:'setDeliveryDate',     label:{ th:'กำหนดวันจัดส่ง', en:'Set Delivery Date' } },
+    { id:'editDeliveryAssign', label:{ th:'แก้วิธีจัดส่ง/ผู้รับผิดชอบ', en:'Edit Shipping Type & Responsible' } },
     { id:'verifyLedger',        label:{ th:'ยืนยันรายการในสมุดบัญชี', en:'Verify Ledger Entry' } },
     { id:'restoreDeleted',      label:{ th:'กู้คืนรายการที่ถูกลบ', en:'Restore Deleted Records' } },
     { id:'changeOrderStatus',   label:{ th:'เปลี่ยนสถานะออเดอร์',   en:'Change Order Status' } },
